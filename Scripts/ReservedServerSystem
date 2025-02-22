@@ -5,18 +5,21 @@ local Messenger = require(game.ReplicatedStorage:WaitForChild("Messenger"))
 local events = game.ReplicatedStorage:WaitForChild("Events")
 local CreateServer = events:WaitForChild("CreateServer")
 local TeleportService = game:GetService("TeleportService")
-local PLACE_ID = game.PlaceId
+local PlaceId = game.PlaceId
 local Players = game:GetService('Players')
-local ms = Messenger.new("ServerList")
-local si = Messenger.new("ServerInfo")
+local ServerInfo = Messenger.new("ServerInfo")
 local MessagingService = game:GetService("MessagingService")
 local JobID = game.JobId
 local MemoryStoreService = game:GetService('MemoryStoreService')
 local Hashmap = MemoryStoreService:GetSortedMap('PlayersInServers')
+local Teleport = events:WaitForChild("Teleport")
 
-local PLAYER_UPDATE_INTERVAL = 5 -- // Seconds between player count updates
-local Expiration = 86400 -- // A day in seconds
-local SERVER_VALUE_FORMAT = "%s %d %s %s %s" -- // String Format
+local Config = {
+    PLAYER_UPDATE_INTERVAL = 5,
+    Expiration = 86400,
+	SERVER_VALUE_FORMAT = "%s %d %s %s %s",
+	MAX_SERVERS_TO_LOAD = 200
+}
 
 local lastUpdate = time()
 local pendingUpdate = false
@@ -32,11 +35,11 @@ local function UpdatePlayerCount()
 		}
 		newData.PlayerCount = #Players:GetPlayers()
 		return newData
-	end, Expiration)
+	end, Config.Expiration)
 end
 
 local function QueuePlayerUpdate()
-	if not pendingUpdate and (time() - lastUpdate) >= PLAYER_UPDATE_INTERVAL then
+	if not pendingUpdate and (time() - lastUpdate) >= Config.PLAYER_UPDATE_INTERVAL then
 		pendingUpdate = true
 		UpdatePlayerCount()
 		lastUpdate = time()
@@ -47,14 +50,24 @@ end
 Players.PlayerAdded:Connect(QueuePlayerUpdate)
 Players.ChildRemoved:Connect(QueuePlayerUpdate)
 
--- // Server creation Function
-CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
-	local success, code = pcall(TeleportService.ReserveServer, TeleportService, PLACE_ID)
+-- // Teleport Function
 
-	if not success then
-		warn("Failed to Reserve Server! "..tostring(code))
-		return
-	end
+local function teleportPlayer(player, placeId, reservedId)
+	local success, err = pcall(function()
+		TeleportService:TeleportToPrivateServer(placeId, reservedId, {player})
+	end)
+	
+	if not success then Hashmap:RemoveAsync(reservedId) return warn("Teleport failed! Server: "..reservedId) end
+	
+	return success
+end
+
+-- // Server creation Function
+
+CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
+	local success, code = pcall(TeleportService.ReserveServer, TeleportService, PlaceId)
+
+	if not success then warn("Failed to Reserve Server! "..tostring(code)) return end
 
 	-- // Initial server data
 	local setSuccess, err = pcall(function()
@@ -63,82 +76,58 @@ CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
 			Name = Name,
 			Desc = Desc,
 			VCMode = VCMode
-		}, Expiration)
+		}, Config.Expiration)
 	end)
 
-	if not setSuccess then
-		warn("Failed to Set Server Data! "..tostring(err))
-		return
-	end
+	if not setSuccess then warn("Failed to Set Server Data! "..tostring(err)) return end
 
-	local teleportSuccess = pcall(function()
-		TeleportService:TeleportToPrivateServer(PLACE_ID, code, {player})
-	end)
+	teleportPlayer(player, PlaceId, code)
 
-	if not teleportSuccess then
-		Hashmap:RemoveAsync(code)
-		warn("Teleport failed! Server: "..code)
-	else
-		si:PublishAsync({
-			Code = code,
-			Name = Name,
-			Desc = Desc,
-			VCMode = VCMode
-		})
-	end
+	ServerInfo:PublishAsync({
+		Code = code,
+		Name = Name,
+		Desc = Desc,
+		VCMode = VCMode
+	})
 end)
+
+-- // StringValue Creation for all Reserved Servers
+
+local function createServerEntry(code, playerCount, name, desc, vcMode)
+	local serverValue = Instance.new("StringValue")
+	serverValue.Name = "Server: " .. code
+	serverValue.Value = string.format(Config.SERVER_VALUE_FORMAT, code, playerCount, name, desc, tostring(vcMode))
+	serverValue.Parent = serversFolder
+	serverEntries[code] = serverValue
+end
 
 -- // Server Info Handling
 
-si:SubscribeAsync(function(data)
+ServerInfo:SubscribeAsync(function(data)
 	if serverEntries[data.Code] then return end
-
-	local serverValue = Instance.new("StringValue")
-	serverValue.Name = "Server: " .. data.Code
-	serverEntries[data.Code] = serverValue
 
 	local success, serverData = pcall(Hashmap.GetAsync, Hashmap, data.Code)
 	local playerCount = (success and serverData and serverData.PlayerCount) or 0
 
-	serverValue.Value = string.format(
-		SERVER_VALUE_FORMAT,
-		data.Code,
-		playerCount,
-		data.Name or "[N/A]",
-		data.Desc or "[No Description]",
-		tostring(data.VCMode)
-	)
-	serverValue.Parent = serversFolder
+	createServerEntry(data.Code, playerCount or 0, data.Name or "[N/A]", data.Desc or "[No Description]", tostring(data.VCMode))
 end)
 
 -- // Load servers when creating new Public Servers or Reserved Servers
 
 local function LoadReservedServers()
 	local success, allServers = pcall(function()
-		return Hashmap:GetRangeAsync(Enum.SortDirection.Ascending, 200)
+		return Hashmap:GetRangeAsync(Enum.SortDirection.Ascending, Config.MAX_SERVERS_TO_LOAD)
 	end)
 
-	if not success or not allServers then
-		warn("Failed to load reserved servers.")
-		return
-	end
+	if not success or not allServers then warn("Failed to load reserved servers.") return end
 
 	for _, entry in ipairs(allServers) do
-		if not serverEntries[entry.key] then
-			local serverValue = Instance.new("StringValue")
-			serverValue.Name = "Server: " .. entry.key
-			serverEntries[entry.key] = serverValue
-
-			serverValue.Value = string.format(
-				SERVER_VALUE_FORMAT,
-				entry.key,
-				entry.value.PlayerCount or 0,
-				entry.value.Name or "[N/A]",
-				entry.value.Desc or "[No Description]",
-				tostring(entry.value.VCMode))
-				
-			serverValue.Parent = serversFolder
-		end
+		(function()
+			if serverEntries[entry.key] then
+				return 
+			end
+			createServerEntry(entry.key, entry.value.PlayerCount or 0, entry.value.Name or "[N/A]", entry.value.Desc or "[No Description]", tostring(entry.value.VCMode))
+		end)()
 	end
 end
 
@@ -152,32 +141,30 @@ end)
 
 local function RemoveAllHashmaps()
 	local success, allEntries = pcall(function()
-		return Hashmap:GetRangeAsync(Enum.SortDirection.Ascending, 200)
+		return Hashmap:GetRangeAsync(Enum.SortDirection.Ascending, Config.MAX_SERVERS_TO_LOAD)
 	end)
 
-	if success and allEntries then
-		serversFolder:ClearAllChildren()
-		for _, entry in ipairs(allEntries) do
-			local key = entry.key
-			print("Attempting to remove entry with key:", key)
+	if not success and not allEntries then return warn("Failed to fetch entries from Hashmap. Error:", allEntries) end
 
-			local removeSuccess, removeError = pcall(function()
-				Hashmap:RemoveAsync(key)
-			end)
+	serversFolder:ClearAllChildren()
 
-			if removeSuccess then
-				print("Successfully removed entry with key:", key)
-			else
-				warn("Failed to remove entry with key:", key, "Error:", removeError)
-			end
-		end
-		print("All hashmaps removed successfully!")
-	else
-		warn("Failed to fetch entries from Hashmap. Error:", allEntries)
+	for _, entry in ipairs(allEntries) do
+		local key = entry.key
+		print("Attempting to remove entry with key:", key)
+
+		local removeSuccess, removeError = pcall(function()
+			Hashmap:RemoveAsync(key)
+		end)
+
+		if not removeSuccess then return warn("Failed to remove entry with key:", key, "Error:", removeError) end
+
+		print("Successfully removed entry with key:", key)
 	end
+	print("All hashmaps removed successfully!")
 end
 
-game.Players.PlayerAdded:Connect(function(plr)
+
+Players.PlayerAdded:Connect(function(plr)
 	plr.Chatted:Connect(function(msg)
 		if msg == "!remove-hashmap" then
 			RemoveAllHashmaps()
@@ -185,9 +172,16 @@ game.Players.PlayerAdded:Connect(function(plr)
 	end)
 end)
 
+-- // Teleport Player on Creation
+
+Teleport.OnServerEvent:Connect(function(player, PlaceID, reservedID)
+	game:GetService("TeleportService"):TeleportToPrivateServer(game.PlaceId, reservedID, {player})
+end)
+
+-- // Remove Hashmap
+
 game:BindToClose(function()
 	pcall(function()
 		Hashmap:RemoveAsync(JobID)
-		serversFolder:ClearAllChildren()
 	end)
 end)

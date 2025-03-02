@@ -49,7 +49,7 @@ local function teleportPlayer(player, placeId, reservedId) -- // Function to tel
 	return success
 end
 
--- // StringValue Creation for all Reserved Servers
+-- // Creates or updates a StringValue instance for a server.
 
 local function createServerEntry(code, playerCount, name, desc, vcMode, creatorId)
 	if name == "[N/A]" and (not creatorId or creatorId == 0) or not code then return nil end -- // Prevent faulty servers with nil names and no creator
@@ -145,49 +145,63 @@ CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
 	teleportPlayer(player, PlaceId, code)
 end)
 
--- // Server Info Handling
+-- // Server Info Handling, every ServerInfo:PublishAsync has a Type value that is recieved by the PublishAsync handler. It could update the player count, create a new server on the hashmap (CreateServerEntry already handles StringValue creation), and remove the StringValue and the Hashmap
+
+function PlayerCountFunction(dataParam)
+	if serverEntries[dataParam.Code] and serverEntries[dataParam.Code].Parent then
+		local success, serverData = pcall(Hashmap.GetAsync, Hashmap, dataParam.Code)
+
+		if success and serverData then
+			local playerCount = dataParam.PlayerCount or serverData.PlayerCount or 0
+			local name = serverData.Name or "[N/A]"
+			local desc = serverData.Desc or "[No Description]"
+			local vcMode = tostring(serverData.VCMode or false)
+			local creatorId = serverData.CreatorId or 0
+
+			serverEntries[dataParam.Code].Value = string.format(Config.SERVER_VALUE_FORMAT, 
+				dataParam.Code, playerCount, name, desc, vcMode, creatorId)
+		end
+	end
+end
+
+function NewServerFunction(dataParam)
+	if serverEntries[dataParam.Code] and serverEntries[dataParam.Code].Parent then
+		local playerCount = dataParam.PlayerCount or 1
+		local name = dataParam.Name or "[N/A]"
+		local desc = dataParam.Desc or "[No Description]"
+		local vcMode = tostring(dataParam.VCMode or false)
+		local creatorId = dataParam.CreatorId or 0
+
+		serverEntries[dataParam.Code].Value = string.format(Config.SERVER_VALUE_FORMAT, dataParam.Code, playerCount, name, desc, vcMode, creatorId)
+	end
+end
+
+function RemoveServerFunction(dataParam)
+	if serverEntries[dataParam.Code] then
+		serverEntries[dataParam.Code]:Destroy()
+		serverEntries[dataParam.Code] = nil
+
+		local success, err = pcall(function()
+			Hashmap:RemoveAsync(dataParam.Code)
+		end)
+	end
+end
 
 ServerInfo:SubscribeAsync(function(data)
 	if not data or not data.Code then return end
 	if data.Type == "PlayerCountUpdate" then
-		if serverEntries[data.Code] and serverEntries[data.Code].Parent then
-			local success, serverData = pcall(Hashmap.GetAsync, Hashmap, data.Code)
-
-			if success and serverData then
-				local playerCount = data.PlayerCount or serverData.PlayerCount or 0
-				local name = serverData.Name or "[N/A]"
-				local desc = serverData.Desc or "[No Description]"
-				local vcMode = tostring(serverData.VCMode or false)
-				local creatorId = serverData.CreatorId or 0
-
-				serverEntries[data.Code].Value = string.format(Config.SERVER_VALUE_FORMAT, 
-					data.Code, playerCount, name, desc, vcMode, creatorId)
-			end
-		end
+		PlayerCountFunction(data)
 	elseif data.Type == "NewServer" or not data.Type then
-		if serverEntries[data.Code] and serverEntries[data.Code].Parent then
-			local playerCount = data.PlayerCount or 1
-			local name = data.Name or "[N/A]"
-			local desc = data.Desc or "[No Description]"
-			local vcMode = tostring(data.VCMode or false)
-			local creatorId = data.CreatorId or 0
-
-			serverEntries[data.Code].Value = string.format(Config.SERVER_VALUE_FORMAT, 
-				data.Code, playerCount, name, desc, vcMode, creatorId)
-		end
+		NewServerFunction(data)
 	elseif data.Type == "RemoveServer" then
-		if serverEntries[data.Code] then
-			serverEntries[data.Code]:Destroy()
-			serverEntries[data.Code] = nil
-
-			local success, err = pcall(function()
-				Hashmap:RemoveAsync(data.Code)
-			end)
-		end
+		RemoveServerFunction(data)
 	end
 end)
 
--- // This is the function that actually creates the StringValues in the LoadReservedServers Function
+-- // Creates StringValue instances for each server in the provided Hashmap data. Checks values before procedding to use the createServerEntry which Creates the StringValues
+-- // Each entry should contain:
+-- // key (string): The server code.
+-- // value (table): The server data (PlayerCount, Name, Desc, VCMode, CreatorId).
 
 local function CreateLoadedValues(HashmapForServers)
 	for _, entry in ipairs(HashmapForServers) do
@@ -209,7 +223,9 @@ local function CreateLoadedValues(HashmapForServers)
 	end
 end
 
--- // Load servers when creating new Public Servers or Reserved Servers
+-- // Fetches all reserved servers from MemoryStoreService and updates the serverEntries table.
+-- // Removes invalid server entries that no longer exist in MemoryStoreService.
+-- // Calls CreateLoadedValues to create new server entries for valid servers.
 
 local function LoadReservedServers()
 	local success, allServers = pcall(function()
@@ -246,7 +262,7 @@ task.spawn(function()
 	end
 end)
 
--- // Remove Hashmaps and their StringValue Function
+-- // Remove Hashmaps and their StringValue Function, usually for debugging or cleaning up hashmap. Removes all entries in the serverEntries table
 
 local function RemoveAllHashmaps()
 	local success, allEntries = pcall(function()

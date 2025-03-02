@@ -18,7 +18,7 @@ local GetCurrentReservedIDEvent = game.ReplicatedStorage.Events.ReturnReservedID
 local RunService = game:GetService("RunService")
 
 local Config = {
-	PLAYER_UPDATE_INTERVAL = 5, -- // (In Seconds)
+	PLAYER_UPDATE_INTERVAL = 5, -- // (In Seconds) How fast the servers will update (Only for player count since its the only one that really changes, may need to dynamically scale it based on the PlayerCount)
 	Expiration = 86400, -- // The expiration of the hashmap in seconds (1 Day)
 	SERVER_VALUE_FORMAT = "%s %d %s %s %s %d", -- // Format: code, playerCount, name, desc, vcMode, creatorId
 	MAX_SERVERS_TO_LOAD = 200 -- Maximum amount of servers you can use in GetRangeAsync (Maximum: 200)
@@ -71,7 +71,7 @@ local function createServerEntry(code, playerCount, name, desc, vcMode, creatorI
 	end
 end
 
--- // Server creation event
+-- // Server creation event, handles the text filtering, creating string values, hashmap creation
 
 CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
 	local success, code = pcall(TeleportService.ReserveServer, TeleportService, PlaceId)
@@ -149,7 +149,6 @@ end)
 
 ServerInfo:SubscribeAsync(function(data)
 	if not data or not data.Code then return end
-
 	if data.Type == "PlayerCountUpdate" then
 		if serverEntries[data.Code] and serverEntries[data.Code].Parent then
 			local success, serverData = pcall(Hashmap.GetAsync, Hashmap, data.Code)
@@ -181,17 +180,34 @@ ServerInfo:SubscribeAsync(function(data)
 			serverEntries[data.Code]:Destroy()
 			serverEntries[data.Code] = nil
 
-			if serverEntries[data.Code] then
-				serverEntries[data.Code]:Destroy()
-				serverEntries[data.Code] = nil
-			end
-
 			local success, err = pcall(function()
 				Hashmap:RemoveAsync(data.Code)
 			end)
 		end
 	end
 end)
+
+-- // This is the function that actually creates the StringValues in the LoadReservedServers Function
+
+local function CreateLoadedValues(HashmapForServers)
+	for _, entry in ipairs(HashmapForServers) do
+		local serverData = entry.value
+		if serverData and type(serverData) == "table" then
+			local playerCount = serverData.PlayerCount or 1
+
+			if playerCount > 0 then
+				createServerEntry(
+					entry.key, 
+					playerCount,	
+					serverData.Name or "[N/A]", 
+					serverData.Desc or "[No Description]", 
+					tostring(serverData.VCMode or false), 
+					serverData.CreatorId or 0
+				)
+			end
+		end
+	end
+end
 
 -- // Load servers when creating new Public Servers or Reserved Servers
 
@@ -216,24 +232,9 @@ local function LoadReservedServers()
 			serverEntries[code] = nil
 		end
 	end
-
-	for _, entry in ipairs(allServers) do
-		local serverData = entry.value
-		if serverData and type(serverData) == "table" then
-			local playerCount = serverData.PlayerCount or 1
-
-			if playerCount > 0 then
-				createServerEntry(
-					entry.key, 
-					playerCount,	
-					serverData.Name or "[N/A]", 
-					serverData.Desc or "[No Description]", 
-					tostring(serverData.VCMode or false), 
-					serverData.CreatorId or 0
-				)
-			end
-		end
-	end
+	
+	CreateLoadedValues(allServers)
+	
 end
 
 LoadReservedServers()
@@ -318,7 +319,7 @@ GetCurrentReservedIDEvent.OnServerEvent:Connect(function(player, ReservedServerI
 			Hashmap:UpdateAsync(ReservedServerID, function(serverData)
 				if not serverData then return nil end
 
-				serverData.PlayerCount = #Players:GetPlayers()
+				serverData.PlayerCount = #Players:GetPlayers() -- // Since there is a delay between firing from the client and the server, we can just use the actual player count instead of #Players:GetPlayers() - 1
 
 				ServerInfo:PublishAsync({
 					Code = ReservedServerID,
@@ -337,12 +338,6 @@ GetCurrentReservedIDEvent.OnServerEvent:Connect(function(player, ReservedServerI
 	end
 end)
 
--- // If the server is empty, this will fire
-
---[[
 game:BindToClose(function()
-	if RunService:IsStudio() then return end
-	GetCurrentReservedIDEvent:FireAllClients(nil)
-	task.wait(1) -- // Wait a little bit so everything can fire properly
+
 end)
---]]

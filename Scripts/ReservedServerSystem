@@ -1,3 +1,17 @@
+--[[
+	
+	Overview:
+	
+- This script allows for Reserved Server Creation
+
+- Works by creating a string value with all necessary information, sending it out to all servers
+
+- Uses Messenger to broadcast all information without a limit and is overall useful for higher CCU games (~1k+). Forum on Messenger: https://devforum.roblox.com/t/messenger-wrapper-for-messagingservice/1669313
+
+- MemoryStoreService used to broadcast and used as a backup for all information (Especially each seperate player count for each reserved server)
+
+--]]
+
 -- // Variables
 
 local serversFolder = game.ReplicatedStorage:WaitForChild("Servers")
@@ -248,9 +262,9 @@ local function LoadReservedServers()
 			serverEntries[code] = nil
 		end
 	end
-	
+
 	CreateLoadedValues(allServers)
-	
+
 end
 
 LoadReservedServers()
@@ -355,5 +369,5 @@ GetCurrentReservedIDEvent.OnServerEvent:Connect(function(player, ReservedServerI
 end)
 
 game:BindToClose(function()
-
+	--// wip, need to implement specific reserved server deleting here
 end)

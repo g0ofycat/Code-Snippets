@@ -1,5 +1,5 @@
 --[[
-	
+
 	Overview:
 	
 - This script allows for Reserved Server Creation
@@ -9,6 +9,10 @@
 - Uses Messenger to broadcast all information without a limit and is overall useful for higher CCU games (~1k+). Forum on Messenger: https://devforum.roblox.com/t/messenger-wrapper-for-messagingservice/1669313
 
 - MemoryStoreService used to broadcast and used as a backup for all information (Especially each seperate player count for each reserved server)
+
+- Main limit for higher CCU games is MemoryStoreService due to the amount of requests, You could use multiple hashmaps
+
+- Estimated CCU Limit for Servers: ~50,000 (1,000 x game.Players.MaxPlayers)
 
 --]]
 
@@ -30,18 +34,19 @@ local Teleport = events:WaitForChild("Teleport")
 local TextService = game:GetService("TextService")
 local GetCurrentReservedIDEvent = game.ReplicatedStorage.Events.ReturnReservedID
 local RunService = game:GetService("RunService")
+local TextChatService = game:GetService("TextChatService")
+
+local serverEntries = {} -- // All Servers inside of a table
 
 local Config = {
-	PLAYER_UPDATE_INTERVAL = 5, -- // (In Seconds) How fast the servers will update (Only for player count since its the only one that really changes, may need to dynamically scale it based on the PlayerCount)
+	PLAYER_UPDATE_INTERVAL = math.max(5, math.floor(#Players:GetPlayers() / 10)), -- // (In Seconds) How fast the servers will update (Only for player count since its the only one that really changes, may need to dynamically scale it based on the PlayerCount, another option is to only call it when the PlayerCount Changes)
 	Expiration = 86400, -- // The expiration of the hashmap in seconds (1 Day)
 	SERVER_VALUE_FORMAT = "%s %d %s %s %s %d", -- // Format: code, playerCount, name, desc, vcMode, creatorId
-	MAX_SERVERS_TO_LOAD = 200 -- Maximum amount of servers you can use in GetRangeAsync (Maximum: 200)
+	MAX_SERVERS_TO_LOAD = math.min(200, #serverEntries + 10) -- Maximum amount of servers you can use in GetRangeAsync (Maximum: 200)
 }
 
 local lastUpdate = time()
 local pendingUpdate = false
-
-local serverEntries = {} -- // All Servers inside of a table
 
 -- // Teleport Function
 
@@ -117,27 +122,52 @@ CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
 		warn("Failed to filter Desc:", Desc)
 	end
 
-	local setSuccess, err = pcall(function()
-		Hashmap:SetAsync(code, {
-			PlayerCount = 1, -- // Start with 1 player (the creator)
-			Name = filteredName,
-			Desc = filteredDesc,
-			VCMode = VCMode,
-			CreatorId = player.UserId
-		}, Config.Expiration)
-	end)
+	-- // Attempt to update player count safely
+	
+	local function updatePlayerCount()
+		local updateSuccess, err = pcall(function()
+			Hashmap:UpdateAsync(code, function(serverData)
+				if not serverData then 
+					-- // Key doesn't exist yet, initialize with 1 player which is the creator
+					return {
+						PlayerCount = 1, 
+						Name = filteredName,
+						Desc = filteredDesc,
+						VCMode = VCMode,
+						CreatorId = player.UserId
+					} 
+				end
 
-	if not setSuccess then
-		warn("Failed to Set Server Data! "..tostring(err))
-		return
+				serverData.PlayerCount = (serverData.PlayerCount or 0) + 1
+				return serverData
+			end, Config.Expiration)
+		end)
+
+		if not updateSuccess then
+			warn("UpdateAsync failed for", code, "Error:", err)
+
+			local setSuccess, setErr = pcall(function()
+				Hashmap:SetAsync(code, {
+					PlayerCount = 1, 
+					Name = filteredName,
+					Desc = filteredDesc,
+					VCMode = VCMode,
+					CreatorId = player.UserId
+				}, Config.Expiration)
+			end)
+
+			if not setSuccess then
+				warn("SetAsync also failed for", code, "Error:", setErr)
+			end
+		end
 	end
 
-	-- // Create a server entry before teleporting
+	updatePlayerCount()
 
-	createServerEntry(code, 1, filteredName, filteredDesc, tostring(VCMode), player.UserId) -- // The Hashmap which stores the information is different than the StringValue which gets the information and relays it
+	-- // Create a server entry before teleporting
+	createServerEntry(code, 1, filteredName, filteredDesc, tostring(VCMode), player.UserId)
 
 	-- // Broadcast the new server info
-
 	local success, errPublish = pcall(function()
 		ServerInfo:PublishAsync({
 			Code = code,
@@ -155,9 +185,9 @@ CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
 	end
 
 	-- // Teleport the player to the new server
-
 	teleportPlayer(player, PlaceId, code)
 end)
+
 
 -- // Server Info Handling, every ServerInfo:PublishAsync has a Type value that is recieved by the PublishAsync handler. It could update the player count, create a new server on the hashmap (CreateServerEntry already handles StringValue creation), and remove the StringValue and the Hashmap
 
@@ -310,15 +340,17 @@ end
 
 -- // Debugging Stuff
 
-Players.PlayerAdded:Connect(function(plr)
-	plr.Chatted:Connect(function(msg)
-		if msg == "!remove-hashmap" and plr.UserId == 1261406957 then -- // Put your userid here
-			RemoveAllHashmaps()
-		elseif msg == "!refresh-servers" and plr.UserId == 1261406957 then -- // Put your userid here
-			LoadReservedServers()
-		end
-	end)
+TextChatService.MessageReceived:Connect(function(TextChatMessage)
+	local plr = TextChatMessage.TextSource
+	local msg = TextChatMessage.Text
+
+	if msg == "!remove-hashmap" and plr.UserId == 1261406957 then
+		RemoveAllHashmaps()
+	elseif msg == "!refresh-servers" and plr.UserId == 1261406957 then
+		LoadReservedServers()
+	end
 end)
+
 
 -- // Teleport Player to existing server
 
@@ -369,5 +401,5 @@ GetCurrentReservedIDEvent.OnServerEvent:Connect(function(player, ReservedServerI
 end)
 
 game:BindToClose(function()
-	--// wip, need to implement specific reserved server deleting here
+	--// wip, need to implement specific reserved server deleting here, triggers when all players leave
 end)

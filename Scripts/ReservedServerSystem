@@ -6,7 +6,7 @@
 
 - Works by creating a string value with all necessary information, sending it out to all servers
 
-- Uses Messenger to broadcast all information without a limit and is overall useful for higher CCU games (~1k+). Forum on Messenger: https://devforum.roblox.com/t/messenger-wrapper-for-messagingservice/1669313
+- Uses Messenger to broadcast all information without a limit and is overall useful for higher CCU games (~10k+). Forum on Messenger: https://devforum.roblox.com/t/messenger-wrapper-for-messagingservice/1669313
 
 - MemoryStoreService used to broadcast and used as a backup for all information (Especially each seperate player count for each reserved server)
 
@@ -35,14 +35,18 @@ local TextService = game:GetService("TextService")
 local GetCurrentReservedIDEvent = game.ReplicatedStorage.Events.ReturnReservedID
 local RunService = game:GetService("RunService")
 local TextChatService = game:GetService("TextChatService")
+local DBMessages = game.ReplicatedStorage.Events.DebugMessages
 
 local serverEntries = {} -- // All Servers inside of a table
+
+local serverDataCache = {} -- // Table to Optomize the amount of MemoryStoreService calls, Used to quickly acess data instead of just constantly calling MemoryStoreService for the data
 
 local Config = {
 	PLAYER_UPDATE_INTERVAL = math.max(5, math.floor(#Players:GetPlayers() / 10)), -- // (In Seconds) How fast the servers will update (Only for player count since its the only one that really changes, may need to dynamically scale it based on the PlayerCount, another option is to only call it when the PlayerCount Changes)
 	Expiration = 86400, -- // The expiration of the hashmap in seconds (1 Day)
 	SERVER_VALUE_FORMAT = "%s %d %s %s %s %d", -- // Format: code, playerCount, name, desc, vcMode, creatorId
-	MAX_SERVERS_TO_LOAD = math.min(200, #serverEntries + 10) -- Maximum amount of servers you can use in GetRangeAsync (Maximum: 200)
+	MAX_SERVERS_TO_LOAD = math.min(200, #serverEntries + 10), -- // Maximum amount of servers you can use in GetRangeAsync (Maximum: 200)
+	LocalExpiration = 30 -- // (In Seconds) Optional data used for the serverDataCache table. The script will use the data in the table for (int) amount of time before resorting to calling MemoryStoreService again
 }
 
 local lastUpdate = time()
@@ -191,19 +195,55 @@ end)
 
 -- // Server Info Handling, every ServerInfo:PublishAsync has a Type value that is recieved by the PublishAsync handler. It could update the player count, create a new server on the hashmap (CreateServerEntry already handles StringValue creation), and remove the StringValue and the Hashmap
 
+local function getCachedServerData(code)
+	if Config.LocalExpiration == 0 then return nil end
+
+	local cachedData = serverDataCache[code]
+	if cachedData and (tick() - cachedData.timestamp) < Config.LocalExpiration then
+		return cachedData.data
+	end
+
+	-- // If we have a cached entry but it's expired, we to update it
+	
+	local success, serverData = pcall(Hashmap.GetAsync, Hashmap, code)
+	if success and serverData then
+		serverDataCache[code] = {
+			data = serverData,
+			timestamp = tick()
+		}
+		return serverData
+	elseif success and not serverData and cachedData then
+		serverDataCache[code] = nil
+		return nil
+	elseif not success and cachedData then
+		-- // On MemoryStore error, we could still use stale data with a warning
+		warn("MemoryStore error, using stale data for "..code)
+		return cachedData.data
+	end
+
+	return nil
+end
+
 function PlayerCountFunction(dataParam)
 	if serverEntries[dataParam.Code] and serverEntries[dataParam.Code].Parent then
-		local success, serverData = pcall(Hashmap.GetAsync, Hashmap, dataParam.Code)
+		local serverData = getCachedServerData(dataParam.Code)
 
-		if success and serverData then
+		if serverData then
 			local playerCount = dataParam.PlayerCount or serverData.PlayerCount or 0
 			local name = serverData.Name or "[N/A]"
 			local desc = serverData.Desc or "[No Description]"
 			local vcMode = tostring(serverData.VCMode or false)
 			local creatorId = serverData.CreatorId or 0
 
+			-- // Update the StringValue
 			serverEntries[dataParam.Code].Value = string.format(Config.SERVER_VALUE_FORMAT, 
 				dataParam.Code, playerCount, name, desc, vcMode, creatorId)
+
+			-- // Update the cache with the new player count
+			if serverDataCache[dataParam.Code] then
+				serverDataCache[dataParam.Code].data.PlayerCount = playerCount
+				serverDataCache[dataParam.Code].timestamp = tick()
+			end
 		end
 	end
 end
@@ -216,7 +256,21 @@ function NewServerFunction(dataParam)
 		local vcMode = tostring(dataParam.VCMode or false)
 		local creatorId = dataParam.CreatorId or 0
 
-		serverEntries[dataParam.Code].Value = string.format(Config.SERVER_VALUE_FORMAT, dataParam.Code, playerCount, name, desc, vcMode, creatorId)
+		-- // Update the StringValue
+		serverEntries[dataParam.Code].Value = string.format(Config.SERVER_VALUE_FORMAT, 
+			dataParam.Code, playerCount, name, desc, vcMode, creatorId)
+
+		-- // Update or create cache entry
+		serverDataCache[dataParam.Code] = {
+			data = {
+				PlayerCount = playerCount,
+				Name = name,
+				Desc = desc,
+				VCMode = vcMode == "true",
+				CreatorId = creatorId
+			},
+			timestamp = tick()
+		}
 	end
 end
 
@@ -224,17 +278,30 @@ function RemoveServerFunction(dataParam)
 	if serverEntries[dataParam.Code] then
 		serverEntries[dataParam.Code]:Destroy()
 		serverEntries[dataParam.Code] = nil
-
+		serverDataCache[dataParam.Code] = nil
+		
 		local success, err = pcall(function()
 			Hashmap:RemoveAsync(dataParam.Code)
 		end)
 	end
 end
 
+-- // Handles the type of the Server, Basically a manager to create, update, and remove servers when sent using :PublishAsync()
+
 ServerInfo:SubscribeAsync(function(data)
 	if not data or not data.Code then return end
+
+	local cachedData = serverDataCache[data.Code]
+	local useCache = cachedData and (tick() - cachedData.timestamp) < Config.LocalExpiration
+
 	if data.Type == "PlayerCountUpdate" then
-		PlayerCountFunction(data)
+		if useCache then
+			cachedData.data.PlayerCount = data.PlayerCount
+			cachedData.timestamp = tick()
+			PlayerCountFunction(data)
+		else
+			PlayerCountFunction(data)
+		end
 	elseif data.Type == "NewServer" or not data.Type then
 		NewServerFunction(data)
 	elseif data.Type == "RemoveServer" then
@@ -284,17 +351,22 @@ local function LoadReservedServers()
 	local validServerCodes = {}
 	for _, entry in ipairs(allServers) do
 		validServerCodes[entry.key] = true
+
+		serverDataCache[entry.key] = {
+			data = entry.value,
+			timestamp = tick()
+		}
 	end
 
 	for code, serverValue in pairs(serverEntries) do
 		if not validServerCodes[code] then
 			serverValue:Destroy()
 			serverEntries[code] = nil
+			serverDataCache[code] = nil
 		end
 	end
 
 	CreateLoadedValues(allServers)
-
 end
 
 LoadReservedServers()
@@ -332,6 +404,7 @@ local function RemoveAllHashmaps()
 			warn("Failed to remove entry with key:", key, "Error:", removeError) 
 		else
 			serverEntries[key] = nil
+			serverDataCache[key] = nil
 		end
 	end
 
@@ -340,17 +413,13 @@ end
 
 -- // Debugging Stuff
 
-TextChatService.MessageReceived:Connect(function(TextChatMessage)
-	local plr = TextChatMessage.TextSource
-	local msg = TextChatMessage.Text
-
-	if msg == "!remove-hashmap" and plr.UserId == 1261406957 then
+DBMessages.OnServerEvent:Connect(function(plr, Message)
+	if Message == "!remove-hashmap" and plr.UserId == 1261406957 then
 		RemoveAllHashmaps()
-	elseif msg == "!refresh-servers" and plr.UserId == 1261406957 then
+	elseif Message == "!refresh-servers" and plr.UserId == 1261406957 then
 		LoadReservedServers()
 	end
 end)
-
 
 -- // Teleport Player to existing server
 
@@ -367,7 +436,14 @@ Teleport.OnServerEvent:Connect(function(player, PlaceID, reservedID)
 	pcall(function()
 		Hashmap:UpdateAsync(reservedID, function(serverData)
 			if not serverData then return nil end
-			serverData.PlayerCount = (#Players:GetPlayers() or 0) + 1 -- // Logic to increment player count, this will trigger when the player, including the creator is teleported to the specific server, updating its hashmap
+			serverData.PlayerCount = (#Players:GetPlayers() or 0) + 1
+
+			-- // Update the cache with the new data
+			if serverDataCache[reservedID] then
+				serverDataCache[reservedID].data.PlayerCount = serverData.PlayerCount
+				serverDataCache[reservedID].timestamp = tick()
+			end
+
 			return serverData
 		end, Config.Expiration)
 	end)
@@ -381,7 +457,12 @@ GetCurrentReservedIDEvent.OnServerEvent:Connect(function(player, ReservedServerI
 			Hashmap:UpdateAsync(ReservedServerID, function(serverData)
 				if not serverData then return nil end
 
-				serverData.PlayerCount = #Players:GetPlayers() -- // Since there is a delay between firing from the client and the server, we can just use the actual player count instead of #Players:GetPlayers() - 1
+				serverData.PlayerCount = #Players:GetPlayers()
+
+				if serverDataCache[ReservedServerID] then
+					serverDataCache[ReservedServerID].data.PlayerCount = serverData.PlayerCount
+					serverDataCache[ReservedServerID].timestamp = tick()
+				end
 
 				ServerInfo:PublishAsync({
 					Code = ReservedServerID,

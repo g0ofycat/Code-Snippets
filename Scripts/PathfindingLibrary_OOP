@@ -1,68 +1,5 @@
 -- // WIP, need to organize and optomize it right now.
 
---[[ Client Code Example:
-
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule"))
-
-local pathfinder = PathfindingModule.new()
-
-pathfinder:SetVisualization(true, {
-	pointSize = 0.7, -- Size of the Visual Part
-	lineSize = 0.3, -- Size of the Grid Part
-	pointColor = Color3.fromRGB(0, 255, 0), -- Color of the Visual Part
-	lineColor = Color3.fromRGB(255, 255, 0), -- Color of the Grid Part
-	lifetime = 15 -- Lifetime of the node before destroying it
-})
-
-local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-
-local center = character.HumanoidRootPart.Position -- // Center of the grid
-local size = Vector3.new(100, 20, 100) -- // Size of the grid (width, height, depth)
-local resolution = 10 -- // Distance between grid points (smaller = more precise, but slower)
-local heightCheck = true -- // Whether to check for obstacles (e.g., walls, terrain)
-
--- Create the grid
-local grid = pathfinder:CreateWorldGrid(center, size, resolution, heightCheck)
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		local mouse = player:GetMouse()
-		local raycastResult = workspace:Raycast(mouse.UnitRay.Origin, mouse.UnitRay.Direction * 1000)
-
-		if raycastResult then
-			local startPosition = character.HumanoidRootPart.Position
-			local targetPosition = raycastResult.Position
-
-			-- // Find a path using the module
-			
-			local path, algorithm = pathfinder:FindBestPath(
-				startPosition, -- // Start position of the NPC (Vector3)
-				targetPosition, -- // End position of the NPC (Vector3)
-				grid, -- // Grid if you want to use the other pathfinding algorithms
-				{"Roblox"}, -- // Possible Names: Roblox (PathfindingService), AStar (A* Pathfinding Algorithm), Dijkstra (Dijkstra Pathfinding Algorithm), Grid (Moves in a grid path)
-				true  -- // Enable visualization
-			)
-
-			if path then
-				print("Found path using", algorithm, "with", #path, "waypoints")
-				
-				-- // Function to actually follow the path, uses your character as an example
-				pathfinder:FollowPath(character, path)
-			else
-				print("No path found!")
-			end
-		end
-	end
-end)
-
---]]
-
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
 
@@ -626,7 +563,7 @@ function PathfindingModule:VisualizeGrid(grid, customOptions)
 		point.Material = Enum.Material.Neon
 		point.Transparency = 0.7
 		point.Color = Color3.fromRGB(100, 100, 100)
-		point.Parent = gridFolder
+		point.Parent = gridFolder or workspace
 	end
 
 	-- When the lifetime is up, delete the node(s)
@@ -695,8 +632,9 @@ function PathfindingModule:FollowPath(character, path)
 				if self.pathConnection then
 					self.pathConnection:Disconnect()
 					self.pathConnection = nil
+				else
+					humanoid:MoveTo(rootPart.Position) -- // Stop moving
 				end
-				humanoid:MoveTo(rootPart.Position) -- // Stop moving
 			end
 		end
 	end)

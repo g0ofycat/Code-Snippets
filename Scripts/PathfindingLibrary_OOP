@@ -1,0 +1,705 @@
+-- // WIP, need to organize and optomize it right now.
+
+--[[ Client Code Example:
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule"))
+
+local pathfinder = PathfindingModule.new()
+
+pathfinder:SetVisualization(true, {
+	pointSize = 0.7, -- Size of the Visual Part
+	lineSize = 0.3, -- Size of the Grid Part
+	pointColor = Color3.fromRGB(0, 255, 0), -- Color of the Visual Part
+	lineColor = Color3.fromRGB(255, 255, 0), -- Color of the Grid Part
+	lifetime = 15 -- Lifetime of the node before destroying it
+})
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+
+local center = character.HumanoidRootPart.Position -- // Center of the grid
+local size = Vector3.new(100, 20, 100) -- // Size of the grid (width, height, depth)
+local resolution = 10 -- // Distance between grid points (smaller = more precise, but slower)
+local heightCheck = true -- // Whether to check for obstacles (e.g., walls, terrain)
+
+-- Create the grid
+local grid = pathfinder:CreateWorldGrid(center, size, resolution, heightCheck)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local mouse = player:GetMouse()
+		local raycastResult = workspace:Raycast(mouse.UnitRay.Origin, mouse.UnitRay.Direction * 1000)
+
+		if raycastResult then
+			local startPosition = character.HumanoidRootPart.Position
+			local targetPosition = raycastResult.Position
+
+			-- // Find a path using the module
+			
+			local path, algorithm = pathfinder:FindBestPath(
+				startPosition, -- // Start position of the NPC (Vector3)
+				targetPosition, -- // End position of the NPC (Vector3)
+				grid, -- // Grid if you want to use the other pathfinding algorithms
+				{"Roblox"}, -- // Possible Names: Roblox (PathfindingService), AStar (A* Pathfinding Algorithm), Dijkstra (Dijkstra Pathfinding Algorithm), Grid (Moves in a grid path)
+				true  -- // Enable visualization
+			)
+
+			if path then
+				print("Found path using", algorithm, "with", #path, "waypoints")
+				
+				-- // Function to actually follow the path, uses your character as an example
+				pathfinder:FollowPath(character, path)
+			else
+				print("No path found!")
+			end
+		end
+	end
+end)
+
+--]]
+
+local PathfindingService = game:GetService("PathfindingService")
+local RunService = game:GetService("RunService")
+
+local PathfindingModule = {}
+PathfindingModule.__index = PathfindingModule
+
+-- // Create a new pathfinding system
+function PathfindingModule.new()
+	local self = setmetatable({}, PathfindingModule)
+	self.algorithms = {
+		Roblox = function(start, goal) return self:RobloxPathfinding(start, goal) end,
+		AStar = function(start, goal, grid) return self:AStarPathfinding(start, goal, grid) end,
+		Dijkstra = function(start, goal, grid) return self:DijkstraPathfinding(start, goal, grid) end,
+		Grid = function(start, goal, grid) return self:GridPathfinding(start, goal, grid) end
+	}
+
+	-- // Visualization properties
+	self.visualFolder = nil
+	self.visualization = {
+		enabled = false,
+		pointSize = 0.5,
+		lineSize = 0.2,
+		pointColor = Color3.fromRGB(0, 162, 255),
+		lineColor = Color3.fromRGB(255, 255, 0),
+		lifetime = 10 -- // Seconds before auto-clearing
+	}
+
+	return self
+end
+
+-- // Find a path using the best available algorithm
+function PathfindingModule:FindBestPath(start, goal, grid, algorithmNames, visualize)
+	for _, name in ipairs(algorithmNames) do
+		local path = self.algorithms[name] and self.algorithms[name](goal, start, grid)
+		if path then 
+			-- // Visualize the path if requested and visualization is enabled
+			if visualize and self.visualization.enabled then
+				self:VisualizePath(path)
+			end
+
+			return path, name 
+		end
+	end
+	return nil, "No valid path found"
+end
+
+-- // Create a grid from the Roblox world for pathfinding, Needed for all pathfinding Algorithms except Roblox
+
+function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck)
+	center = center or Vector3.new(0, 0, 0)
+	size = size or Vector3.new(100, 10, 100)
+	resolution = resolution or 1  -- // Distance between grid points
+	heightCheck = heightCheck or true
+
+	local grid = {}
+	local halfSize = size / 2
+	local minPos = center - halfSize
+	local maxPos = center + halfSize
+
+	-- // Create raycast parameters
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {}
+
+	-- // Iterate through the grid space
+	local gridPoints = 0
+
+	for x = minPos.X, maxPos.X, resolution do
+		for z = minPos.Z, maxPos.Z, resolution do
+			local top = Vector3.new(x, maxPos.Y, z)
+			local bottom = Vector3.new(x, minPos.Y, z)
+
+			if heightCheck then
+				-- // Cast a ray down to find the surface
+				local result = workspace:Raycast(top, Vector3.new(0, -size.Y, 0), params)
+
+				if result then
+					local pos = Vector3.new(
+						math.floor(x / resolution + 0.5) * resolution,
+						result.Position.Y,
+						math.floor(z / resolution + 0.5) * resolution
+					)
+					grid[pos] = true
+					gridPoints = gridPoints + 1
+				end
+			else
+				-- // Just use a flat grid at a fixed height
+				local pos = Vector3.new(
+					math.floor(x / resolution + 0.5) * resolution,
+					minPos.Y,
+					math.floor(z / resolution + 0.5) * resolution
+				)
+				grid[pos] = true
+				gridPoints = gridPoints + 1
+			end
+		end
+	end
+
+	print("Created world grid with " .. gridPoints .. " points")
+
+	-- // Visualize the grid if enabled
+	if self.visualization.enabled then
+		self:VisualizeGrid(grid)
+	end
+
+	return grid
+end
+
+--------------------
+-- ROBLOX PATHFINDER (Mainly use this as a last resort in the fallback table or you just want normal pathfinding)
+--------------------
+function PathfindingModule:RobloxPathfinding(start, goal)
+	local path = PathfindingService:CreatePath({
+		AgentRadius = 2,
+		AgentHeight = 5,
+		AgentCanJump = true
+	})
+
+	local success, errorMessage = pcall(function()
+		path:ComputeAsync(start, goal)
+	end)
+
+	if success and path.Status == Enum.PathStatus.Success then
+		return path:GetWaypoints()
+	else
+		warn("Roblox pathfinding failed: " .. (errorMessage or path.Status.Name))
+		return nil
+	end
+end
+
+--------------------
+-- A* PATHFINDER (Best for finding Optimal Paths)
+--------------------
+function PathfindingModule:AStarPathfinding(start, goal, grid)
+	if not grid then
+		warn("AStar pathfinding requires a grid")
+		return nil
+	end
+
+	-- // Helper function to calculate heuristic (estimated cost to goal)
+	local function heuristic(a, b)
+		return (b - a).Magnitude
+	end
+
+	local openSet, closedSet = {}, {}
+	table.insert(openSet, start)
+
+	local cameFrom = {}
+	local gScore = {}
+	local fScore = {}
+
+	-- // Initialize scores
+	for pos, _ in pairs(grid) do
+		gScore[pos] = math.huge
+		fScore[pos] = math.huge
+	end
+
+	gScore[start] = 0
+	fScore[start] = heuristic(start, goal)
+
+	while #openSet > 0 do
+		task.wait()
+		-- // Find node with lowest fScore
+		local current = nil
+		local lowestScore = math.huge
+		local currentIndex = 0
+
+		for i, node in ipairs(openSet) do
+			if fScore[node] and fScore[node] < lowestScore then
+				lowestScore = fScore[node]
+				current = node
+				currentIndex = i
+			end
+		end
+
+		-- // If we reached the goal, reconstruct and return the path
+		if current == goal then
+			local path = {}
+			local curr = current
+			while curr do
+				table.insert(path, 1, curr)
+				curr = cameFrom[curr]
+				task.wait()
+			end
+			return path
+		end
+
+		-- // Remove current from openSet and add to closedSet
+		table.remove(openSet, currentIndex)
+		closedSet[current] = true
+
+		-- // Check each neighbor
+		for _, neighbor in ipairs(self:GetNeighbors(current, grid)) do
+			if not closedSet[neighbor] then
+				local tentativeGScore = gScore[current] + (neighbor - current).Magnitude
+
+				local isNewPath = false
+				if not table.find(openSet, neighbor) then
+					table.insert(openSet, neighbor)
+					isNewPath = true
+				elseif tentativeGScore < gScore[neighbor] then
+					isNewPath = true
+				end
+
+				if isNewPath then
+					cameFrom[neighbor] = current
+					gScore[neighbor] = tentativeGScore
+					fScore[neighbor] = gScore[neighbor] + heuristic(neighbor, goal)
+				end
+			end
+		end
+	end
+
+	warn("AStar pathfinding could not find a path")
+	return nil
+end
+
+--------------------
+-- DIJKSTRA PATHFINDER (Used for mainly finding the shortest path between 2 nodes)
+--------------------
+function PathfindingModule:DijkstraPathfinding(start, goal, grid)
+	if not grid then
+		warn("Dijkstra pathfinding requires a grid")
+		return nil
+	end
+
+	local distances = {}
+	local previous = {}
+	local nodes = {}
+
+	-- // Initialize
+	for pos, _ in pairs(grid) do
+		distances[pos] = math.huge
+		previous[pos] = nil
+		table.insert(nodes, pos)
+	end
+
+	distances[start] = 0
+
+	while #nodes > 0 do
+		task.wait()
+		-- // Find node with minimum distance
+		local minDistance = math.huge
+		local minIndex = 0
+		local current = nil
+
+		for i, node in ipairs(nodes) do
+			if distances[node] < minDistance then
+				minDistance = distances[node]
+				minIndex = i
+				current = node
+			end
+		end
+
+		-- // If we can't find a node or reached the goal, break
+		if minDistance == math.huge or current == goal then
+			break
+		end
+
+		-- // Remove current from unvisited set
+		table.remove(nodes, minIndex)
+
+		-- // Check each neighbor
+		for _, neighbor in ipairs(self:GetNeighbors(current, grid)) do
+			if table.find(nodes, neighbor) then
+				local alt = distances[current] + (neighbor - current).Magnitude
+				if alt < distances[neighbor] then
+					distances[neighbor] = alt
+					previous[neighbor] = current
+				end
+			end
+		end
+	end
+
+	-- // If goal was reached, reconstruct path
+	if previous[goal] or goal == start then
+		local path = {}
+		local curr = goal
+
+		while curr do
+			table.insert(path, 1, curr)
+			curr = previous[curr]
+			task.wait()
+		end
+
+		return path
+	end
+
+	warn("Dijkstra pathfinding could not find a path")
+	return nil
+end
+
+--------------------
+-- GRID-BASED PATHFINDER (BREADTH-FIRST SEARCH, Used for sharp turns in a grid pattern, usually inaccurate though if you're using a large grid)
+--------------------
+function PathfindingModule:GridPathfinding(start, goal, grid)
+	if not grid then
+		warn("Grid pathfinding requires a grid")
+		return nil
+	end
+
+	local queue = {start}
+	local visited = {[start] = true}
+	local cameFrom = {[start] = nil}
+
+	while #queue > 0 do
+		task.wait()
+		local current = table.remove(queue, 1)
+
+		if current == goal then
+			-- // Reconstruct path
+			local path = {}
+			local curr = current
+
+			while curr do
+				table.insert(path, 1, curr)
+				curr = cameFrom[curr]
+				task.wait()
+			end
+
+			return path
+		end
+
+		-- // Check each neighbor
+		for _, neighbor in ipairs(self:GetNeighbors(current, grid)) do
+			if not visited[neighbor] then
+				visited[neighbor] = true
+				cameFrom[neighbor] = current
+				table.insert(queue, neighbor)
+			end
+		end
+	end
+
+	warn("Grid pathfinding could not find a path")
+	return nil
+end
+
+--------------------
+-- HELPER FUNCTIONS
+--------------------
+function PathfindingModule:GetNeighbors(node, grid)
+	local neighbors = {}
+
+	-- // Basic 4-directional movement (can be extended to 8-directional or 3D)
+	local directions = {
+		Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0),
+		Vector3.new(0, 0, 1), Vector3.new(0, 0, -1)
+	}
+
+	-- // Add diagonals for smoother paths
+	table.insert(directions, Vector3.new(1, 0, 1))
+	table.insert(directions, Vector3.new(1, 0, -1))
+	table.insert(directions, Vector3.new(-1, 0, 1))
+	table.insert(directions, Vector3.new(-1, 0, -1))
+
+	-- // Check if node is valid in our grid
+	local function isValidNode(pos)
+		-- // If grid is a table with positions as keys
+		if type(grid) == "table" then
+			if grid[pos] ~= nil then
+				return true
+			end
+
+			-- // If grid is a function that checks validity
+			if type(grid) == "function" then
+				return grid(pos)
+			end
+
+			-- // If grid has a IsValidPosition method
+			if type(grid) == "table" and grid.IsValidPosition then
+				return grid:IsValidPosition(pos)
+			end
+		end
+
+		-- // Default to checking if position is walkable using Roblox's WorldRoot
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = {}
+
+		local result = workspace:Raycast(pos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), params)
+		return result ~= nil
+	end
+
+	for _, dir in ipairs(directions) do
+		local neighbor = node + dir
+		if isValidNode(neighbor) then
+			table.insert(neighbors, neighbor)
+		end
+	end
+
+	return neighbors
+end
+
+--------------------
+-- VISUALIZATION FUNCTIONS
+--------------------
+
+-- // Enable or disable path visualization
+function PathfindingModule:SetVisualization(enabled, options)
+	self.visualization.enabled = enabled
+
+	-- // Apply custom options if provided
+	if options then
+		for k, v in pairs(options) do
+			if self.visualization[k] ~= nil then
+				self.visualization[k] = v
+			end
+		end
+	end
+
+	-- // Create visualization folder if needed
+	if enabled and not self.visualFolder then
+		self:CreateVisualizationFolder()
+	end
+
+	-- // Clear existing visualization if disabling
+	if not enabled and self.visualFolder then
+		self:ClearVisualization()
+	end
+
+	return self
+end
+
+-- // Create folder to store visualization objects
+function PathfindingModule:CreateVisualizationFolder()
+	if not self.visualFolder then
+		self.visualFolder = Instance.new("Folder")
+		self.visualFolder.Name = "PathfindingVisualization"
+
+		-- // Parent to workspace or appropriate location
+		if RunService:IsClient() then
+			local player = game:GetService("Players").LocalPlayer
+			self.visualFolder.Parent = player.PlayerGui
+		else
+			self.visualFolder.Parent = workspace
+		end
+	end
+
+	return self.visualFolder
+end
+
+function PathfindingModule:VisualizePath(path, customOptions)
+	if not path or #path == 0 then return end
+	if not self.visualization.enabled then return end
+
+	-- // Clear existing visualization
+	self:ClearVisualization()
+
+	-- // Apply custom options for this specific visualization
+	local options = {}
+	for k, v in pairs(self.visualization) do
+		options[k] = v
+	end
+
+	if customOptions then
+		for k, v in pairs(customOptions) do
+			options[k] = v
+		end
+	end
+
+	-- // Create the visualization folder if needed
+	if not self.visualFolder then
+		self:CreateVisualizationFolder()
+	end
+
+	-- // Create points for each waypoint
+	for i, waypoint in ipairs(path) do
+		if typeof(waypoint) == "Vector3" then
+			-- // Create the point
+			local point = Instance.new("Part")
+			point.Name = "PathPoint_" .. i
+			point.Shape = Enum.PartType.Ball
+			point.Size = Vector3.new(options.pointSize, options.pointSize, options.pointSize)
+			point.Position = waypoint
+			point.Anchored = true
+			point.CanCollide = false
+			point.Material = Enum.Material.Neon
+			point.Transparency = 0.3
+			point.Color = options.pointColor
+			point.Parent = self.visualFolder
+
+			-- Create a line connecting to the next point (if there is one)
+			if i < #path and typeof(path[i + 1]) == "Vector3" then
+				local nextPoint = path[i + 1]
+				local direction = (nextPoint - waypoint).Unit
+				local distance = (nextPoint - waypoint).Magnitude
+
+				local line = Instance.new("Part")
+				line.Name = "PathLine_" .. i
+				line.Size = Vector3.new(options.lineSize, options.lineSize, distance)
+				line.CFrame = CFrame.new(
+					waypoint + direction * (distance / 2), 
+					waypoint + direction * distance
+				)
+				line.Anchored = true
+				line.CanCollide = false
+				line.Material = Enum.Material.Neon
+				line.Transparency = 0.5
+				line.Color = options.lineColor
+				line.Parent = self.visualFolder
+			end
+		else
+			warn("Waypoint at index " .. i .. " is not a Vector3. Skipping visualization for this waypoint.")
+		end
+	end
+
+	-- When the lifetime is up, delete the node(s)
+	if options.lifetime and options.lifetime > 0 then
+		task.delay(options.lifetime, function()
+			if self.visualFolder then
+				self:ClearVisualization()
+			end
+		end)
+	end
+
+	return self
+end
+
+-- // Visualize grid points for debugging
+function PathfindingModule:VisualizeGrid(grid, customOptions)
+	if not grid then return end
+	if not self.visualization.enabled then return end
+
+	-- // Apply custom options for this specific visualization
+	local options = {}
+	for k, v in pairs(self.visualization) do
+		options[k] = v
+	end
+
+	if customOptions then
+		for k, v in pairs(customOptions) do
+			options[k] = v
+		end
+	end
+
+	if not self.visualFolder then
+		self:CreateVisualizationFolder()
+	end
+
+	-- // Create a subfolder for the nodes
+	local gridFolder = Instance.new("Folder")
+	gridFolder.Name = "GridVisualization"
+	gridFolder.Parent = self.visualFolder
+
+	-- // Visualize the grid points
+	local count = 0
+	for pos, _ in pairs(grid) do
+		count = count + 1
+		if count > 10000 then  -- // Can set this to a higher value
+			warn("Grid is too large to fully visualize (>10000 points). Showing first 1000 points.")
+			break
+		end
+
+		local point = Instance.new("Part")
+		point.Name = "GridPoint_" .. count
+		point.Shape = Enum.PartType.Ball
+		point.Size = Vector3.new(options.pointSize * 0.5, options.pointSize * 0.5, options.pointSize * 0.5)
+		point.Position = pos
+		point.Anchored = true
+		point.CanCollide = false
+		point.Material = Enum.Material.Neon
+		point.Transparency = 0.7
+		point.Color = Color3.fromRGB(100, 100, 100)
+		point.Parent = gridFolder
+	end
+
+	-- When the lifetime is up, delete the node(s)
+	if options.lifetime and options.lifetime > 0 then
+		task.delay(options.lifetime, function()
+			if gridFolder and gridFolder.Parent then
+				gridFolder:Destroy()
+			end
+		end)
+	end
+
+	return self
+end
+
+-- // Clear all visualizations
+function PathfindingModule:ClearVisualization()
+	if self.visualFolder then
+		self.visualFolder:ClearAllChildren()
+	end
+
+	return self
+end
+
+--------------------
+-- FOLLOW PATH FUNCTION (Function to actually move the npc to the it)
+--------------------
+function PathfindingModule:FollowPath(character, path)
+	if not path or #path == 0 then return end
+
+	local humanoid = character:FindFirstChild("Humanoid")
+	if not humanoid then return end
+
+	-- // Move through each waypoint
+	local currentWaypointIndex = 1
+
+	-- // Store the connection in the module instance (self) instead of the character
+	if self.pathConnection then
+		self.pathConnection:Disconnect()
+		self.pathConnection = nil
+	end
+
+	-- // Create a new connection to follow the path
+	self.pathConnection = RunService.Heartbeat:Connect(function()
+		if not humanoid or humanoid.Health <= 0 then -- // If the player dies then we destroy the path
+			if self.pathConnection then
+				self.pathConnection:Disconnect()
+				self.pathConnection = nil
+			end
+			return
+		end
+
+		local currentWaypoint = path[currentWaypointIndex]
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if not rootPart then return end
+
+		-- // Move toward the current waypoint
+		humanoid:MoveTo(currentWaypoint.Position)
+
+		-- // Check if we've reached the waypoint
+		local distance = (rootPart.Position - currentWaypoint.Position).Magnitude
+		if distance < 2 then
+			currentWaypointIndex = currentWaypointIndex + 1
+
+			-- // If we've reached the end of the path
+			if currentWaypointIndex > #path then
+				if self.pathConnection then
+					self.pathConnection:Disconnect()
+					self.pathConnection = nil
+				end
+				humanoid:MoveTo(rootPart.Position) -- // Stop moving
+			end
+		end
+	end)
+end
+
+return PathfindingModule

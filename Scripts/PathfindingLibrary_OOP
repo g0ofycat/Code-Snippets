@@ -1,4 +1,4 @@
--- // WIP, need to organize and optomize it right now.
+-- // WIP
 
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
@@ -104,8 +104,8 @@ function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck
 	if self.visualization.enabled then
 		self:VisualizeGrid(grid)
 	end
-
 	return grid
+
 end
 
 --------------------
@@ -448,12 +448,11 @@ function PathfindingModule:VisualizePath(path, customOptions)
 	-- // Clear existing visualization
 	self:ClearVisualization()
 
-	-- // Apply custom options for this specific visualization
+	-- // Apply custom options
 	local options = {}
 	for k, v in pairs(self.visualization) do
 		options[k] = v
 	end
-
 	if customOptions then
 		for k, v in pairs(customOptions) do
 			options[k] = v
@@ -465,35 +464,57 @@ function PathfindingModule:VisualizePath(path, customOptions)
 		self:CreateVisualizationFolder()
 	end
 
-	-- // Create points for each waypoint
+	-- // Extract positions from waypoints
+	local positions = {}
 	for i, waypoint in ipairs(path) do
+		local position
+
+		-- Handle different waypoint types
 		if typeof(waypoint) == "Vector3" then
-			-- // Create the point
-			local point = Instance.new("Part")
-			point.Name = "PathPoint_" .. i
-			point.Shape = Enum.PartType.Ball
-			point.Size = Vector3.new(options.pointSize, options.pointSize, options.pointSize)
-			point.Position = waypoint
-			point.Anchored = true
-			point.CanCollide = false
-			point.Material = Enum.Material.Neon
-			point.Transparency = 0.3
-			point.Color = options.pointColor
-			point.Parent = self.visualFolder
+			position = waypoint
+		elseif typeof(waypoint) == "Instance" then
+			position = waypoint.Position
+		elseif type(waypoint) == "table" and waypoint.Position then
+			position = waypoint.Position
+		else
+			warn("Waypoint at index " .. i .. " is not a recognized type. Type:", typeof(waypoint))
+			continue
+		end
 
-			-- Create a line connecting to the next point (if there is one)
-			if i < #path and typeof(path[i + 1]) == "Vector3" then
-				local nextPoint = path[i + 1]
-				local direction = (nextPoint - waypoint).Unit
-				local distance = (nextPoint - waypoint).Magnitude
+		positions[i] = position
+	end
 
+	-- // Create visualization elements
+	for i, position in ipairs(positions) do
+		-- Create point
+		local point = Instance.new("Part")
+		point.Name = "PathPoint_" .. i
+		point.Shape = Enum.PartType.Ball
+		point.Size = Vector3.new(options.pointSize, options.pointSize, options.pointSize)
+		point.Position = position
+		point.Anchored = true
+		point.CanCollide = false
+		point.Material = Enum.Material.Neon
+		point.Transparency = 0.3
+		point.Color = options.pointColor
+		point.Parent = self.visualFolder
+
+		-- Create line to next point
+		if i < #positions then
+			local nextPosition = positions[i + 1]
+			local direction = (nextPosition - position)
+			local distance = direction.Magnitude
+
+			if distance > 0 then
+				direction = direction.Unit
 				local line = Instance.new("Part")
 				line.Name = "PathLine_" .. i
 				line.Size = Vector3.new(options.lineSize, options.lineSize, distance)
-				line.CFrame = CFrame.new(
-					waypoint + direction * (distance / 2), 
-					waypoint + direction * distance
-				)
+
+				-- Create proper orientation
+				local midpoint = position + direction * (distance/2)
+				line.CFrame = CFrame.lookAt(midpoint, nextPosition)
+
 				line.Anchored = true
 				line.CanCollide = false
 				line.Material = Enum.Material.Neon
@@ -501,12 +522,10 @@ function PathfindingModule:VisualizePath(path, customOptions)
 				line.Color = options.lineColor
 				line.Parent = self.visualFolder
 			end
-		else
-			warn("Waypoint at index " .. i .. " is not a Vector3. Skipping visualization for this waypoint.")
 		end
 	end
 
-	-- When the lifetime is up, delete the node(s)
+	-- // Handle lifetime
 	if options.lifetime and options.lifetime > 0 then
 		task.delay(options.lifetime, function()
 			if self.visualFolder then
@@ -592,7 +611,6 @@ end
 --------------------
 function PathfindingModule:FollowPath(character, path)
 	if not path or #path == 0 then return end
-
 	local humanoid = character:FindFirstChild("Humanoid")
 	if not humanoid then return end
 
@@ -607,7 +625,17 @@ function PathfindingModule:FollowPath(character, path)
 
 	-- // Create a new connection to follow the path
 	self.pathConnection = RunService.Heartbeat:Connect(function()
-		if not humanoid or humanoid.Health <= 0 then -- // If the player dies then we destroy the path
+		if not humanoid or humanoid.Health <= 0 then -- // If the character dies then we destroy the path
+			if self.pathConnection then
+				self.pathConnection:Disconnect()
+				self.pathConnection = nil
+			end
+			return
+		end
+
+		-- Check if we've reached the end of the path
+		if currentWaypointIndex > #path then
+			humanoid:MoveTo(humanoid.RootPart.Position) -- Stop moving
 			if self.pathConnection then
 				self.pathConnection:Disconnect()
 				self.pathConnection = nil
@@ -624,18 +652,9 @@ function PathfindingModule:FollowPath(character, path)
 
 		-- // Check if we've reached the waypoint
 		local distance = (rootPart.Position - currentWaypoint.Position).Magnitude
-		if distance < 2 then
-			currentWaypointIndex = currentWaypointIndex + 1
 
-			-- // If we've reached the end of the path
-			if currentWaypointIndex > #path then
-				if self.pathConnection then
-					self.pathConnection:Disconnect()
-					self.pathConnection = nil
-				else
-					humanoid:MoveTo(rootPart.Position) -- // Stop moving
-				end
-			end
+		if distance < 2 then
+			currentWaypointIndex = currentWaypointIndex + 1  -- Increment by 1 instead of 13
 		end
 	end)
 end

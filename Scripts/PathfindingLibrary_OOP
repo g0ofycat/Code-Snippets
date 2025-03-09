@@ -54,8 +54,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 end)
 --]]
 
--- // WIP
-
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
 
@@ -131,7 +129,8 @@ function PathfindingModule:GetNeighbors(position, grid, resolution)
 	resolution = resolution or self.resolution
 	local neighbors = {}
 
-	-- Base movement (4-directional for grid-based movement)
+	-- // Base movement (4-directional for grid-based movement)
+	
 	local offsets = {
 		Vector3.new(resolution, 0, 0),  -- Right
 		Vector3.new(-resolution, 0, 0), -- Left
@@ -141,7 +140,7 @@ function PathfindingModule:GetNeighbors(position, grid, resolution)
 		Vector3.new(0, -resolution, 0), -- Down
 	}
 
-	-- If NOT using the Grid algorithm, allow diagonal movement
+	-- // If NOT using the Grid algorithm, allow diagonal movement
 	if self.currentAlgorithm ~= "Grid" then
 		local diagonalOffsets = {
 			Vector3.new(resolution, 0, resolution),
@@ -154,12 +153,12 @@ function PathfindingModule:GetNeighbors(position, grid, resolution)
 		end
 	end
 
-	-- Process all valid neighbor positions
+	-- // Process all valid neighbor positions
 	for _, offset in ipairs(offsets) do
 		local neighborPos = position + offset
 		local neighborKey = toHashVector3(neighborPos)
 
-		-- Check if the position exists in the grid
+		-- // Check if the position exists in the grid
 		if grid[neighborKey] then
 			table.insert(neighbors, grid[neighborKey])
 		end
@@ -168,7 +167,7 @@ function PathfindingModule:GetNeighbors(position, grid, resolution)
 	return neighbors
 end
 
--- // All for A* Pathfinding
+-- // All helping functions for A* Pathfinding
 
 local function heuristic(a, b)
 	return (b - a).Magnitude
@@ -246,7 +245,7 @@ local function newBinaryHeap()
 end
 
 --------------------
--- ROBLOX PATHFINDER (Mainly use this as a last resort in the fallback table or you just want normal pathfinding)
+-- ROBLOX PATHFINDER (Mainly use this as a last resort in the fallback table or you just want normal pathfinding) Time Complexity: ???
 --------------------
 function PathfindingModule:RobloxPathfinding(start, goal)
 	local path = PathfindingService:CreatePath({
@@ -430,7 +429,7 @@ function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck
 end
 
 --------------------
--- DIJKSTRA PATHFINDER (Used for mainly finding the shortest path between 2 nodes)
+-- DIJKSTRA PATHFINDER (Used for mainly finding the shortest path between 2 nodes, more costly) Time Complexity: O(V)
 --------------------
 function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 	if not grid or not next(grid) then
@@ -438,56 +437,83 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 		return nil
 	end
 
-	local toKey = toHashVector3
-	local startKey = toKey(start)
-	local goalKey = toKey(goal)
+	local startKey = toHashVector3(start)
+	local goalKey = toHashVector3(goal)
 
-	-- Validate start and goal
+	-- // Snap start to nearest grid point if not found
 	if not grid[startKey] then
-		warn("Start position not in grid:", startKey)
-		return nil
+		local closestDist = math.huge
+		local closestPos = nil
+		for key, pos in pairs(grid) do
+			local dist = (pos - start).Magnitude
+			if dist < closestDist then
+				closestDist = dist
+				closestPos = pos
+			end
+		end
+		if closestPos and closestDist < 5 then
+			start = closestPos
+			startKey = toHashVector3(start)
+		else
+			warn("Start position not found in grid and no nearby point found: ", startKey)
+			return nil
+		end
 	end
+
+	-- // Snap goal to nearest grid point if not found
 	if not grid[goalKey] then
-		warn("Goal position not in grid:", goalKey)
-		return nil
+		local closestDist = math.huge
+		local closestPos = nil
+		for key, pos in pairs(grid) do
+			local dist = (pos - goal).Magnitude
+			if dist < closestDist then
+				closestDist = dist
+				closestPos = pos
+			end
+		end
+		if closestPos and closestDist < 5 then
+			goal = closestPos
+			goalKey = toHashVector3(goal)
+		else
+			warn("Goal position not found in grid and no nearby point found: ", goalKey)
+			return nil
+		end
 	end
 
 	local distances = {}
 	local previous = {}
 	local openSet = newBinaryHeap()
+	local visited = {}
 
-	-- Add distances and add all nodes to openSet
+	-- Initialize distances and heap
 	for posKey, pos in pairs(grid) do
 		distances[posKey] = math.huge
 		previous[posKey] = nil
-		openSet:push(pos, math.huge)
 	end
 
 	distances[startKey] = 0
-	openSet = newBinaryHeap() -- Reset openSet with correct distances
-	openSet:push(start, 0)
-
-	local visited = {}
+	openSet:push(grid[startKey], 0) -- // Push the actual position from grid
 
 	while not openSet:isEmpty() do
 		local current, currentDistance = openSet:pop()
-		local currentKey = toKey(current)
+		local currentKey = toHashVector3(current)
 
 		if visited[currentKey] then
 			continue
 		end
 		visited[currentKey] = true
 
-		if current == goal then
+		-- // Check if goal is reached using keys
+		if currentKey == goalKey then
 			break
 		end
 
-		-- Check each neighbor
+		-- // Check each neighbor
 		for _, neighbor in ipairs(self:GetNeighbors(current, grid)) do
-			local neighborKey = toKey(neighbor)
-			if not visited[neighborKey] then
-				local alt = distances[currentKey] + (neighbor - current).Magnitude
-				if alt < (distances[neighborKey] or math.huge) then
+			local neighborKey = toHashVector3(neighbor)
+			if not visited[neighborKey] and grid[neighborKey] then -- // Ensure neighbor is in grid
+				local alt = currentDistance + (neighbor - current).Magnitude
+				if alt < distances[neighborKey] then
 					distances[neighborKey] = alt
 					previous[neighborKey] = current
 					openSet:push(neighbor, alt)
@@ -496,17 +522,17 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 		end
 	end
 
-	-- Reconstruct path if goal was reached
+	-- // Reconstruct path if goal was reached
 	if distances[goalKey] == math.huge then
 		warn("Dijkstra pathfinding could not find a path")
 		return nil
 	end
 
 	local path = {}
-	local curr = goal
+	local curr = grid[goalKey] -- // Start with goal position
 	while curr do
 		table.insert(path, 1, curr)
-		local currKey = toKey(curr)
+		local currKey = toHashVector3(curr)
 		curr = previous[currKey]
 	end
 

@@ -6,7 +6,7 @@ local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingMod
 
 local pathfinder = PathfindingModule.new()
 
-pathfinder:SetVisualization(true, { -- // Set to true to visualize grid
+pathfinder:SetVisualization(true, { -- // Set to true to visualize grid, if youre making massive grids then don't set this to true
 	pointSize = 1, -- // Size of the Visual Part
 	lineSize = 0.2, -- // Size of the Grid Part
 	pointColor = Color3.fromRGB(102, 0, 255), -- // Color of the Visual Part
@@ -107,7 +107,7 @@ function PathfindingModule:FindBestPath(start, goal, grid, algorithmNames, visua
 		local path = self.algorithms[name] and self.algorithms[name](start, goal, grid)
 		if path then 
 			-- // Visualize the path if requested and visualization is enabled
-			if visualize and self.visualization.enabled then
+			if visualize then
 				self:VisualizePath(path)
 			end
 
@@ -377,8 +377,6 @@ end
 function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck)
 	if heightCheck == nil then heightCheck = true end
 	self.resolution = resolution
-	center = center or Vector3.new(0, 0, 0)
-	size = size or Vector3.new(200, 1000, 200)
 
 	local grid = {}
 	local halfSize = size / 2
@@ -560,11 +558,7 @@ function PathfindingModule:VisualizePath(path, customOptions)
 		warn("Path is invalid or empty.")
 		return
 	end
-	if not self.visualization.enabled then
-		warn("Visualization is disabled.")
-		return
-	end
-
+	
 	-- // Clear existing visualization
 	self:ClearVisualization()
 

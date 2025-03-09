@@ -1,3 +1,59 @@
+--[[ Client Code Example:
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule"))
+
+local pathfinder = PathfindingModule.new()
+
+pathfinder:SetVisualization(true, { -- // Set to true to visualize grid
+	pointSize = 1, -- // Size of the Visual Part
+	lineSize = 0.2, -- // Size of the Grid Part
+	pointColor = Color3.fromRGB(102, 0, 255), -- // Color of the Visual Part
+	lineColor = Color3.fromRGB(136, 0, 255) -- // Color of the Grid Part
+})
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+
+local grid = pathfinder:CreateWorldGrid()
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local mouse = player:GetMouse()
+		local raycastResult = workspace:Raycast(mouse.UnitRay.Origin, mouse.UnitRay.Direction * 1000)
+
+		if raycastResult then
+			local startPosition = character.HumanoidRootPart.Position
+			local targetPosition = raycastResult.Position
+
+			-- // Find a path using the module
+			
+			local path, algorithm = pathfinder:FindBestPath(
+				startPosition, -- // Start position of the NPC (Vector3)
+				targetPosition, -- // End position of the NPC (Vector3)
+				grid, -- // Grid if you want to use the other pathfinding algorithms other than Roblox
+				{"AStar", "Roblox"}, -- // Possible Names: Roblox (PathfindingService), AStar (A* Pathfinding Algorithm), Dijkstra (Dijkstra Pathfinding Algorithm)
+				-- // The table above can store multiple pathfinding system as a fallback, if A* Fails then the normal Roblox one can be used. There can be as much as you want.
+				true -- // Set to true to visualize path
+			)
+
+			if path then
+				print("Found path using", algorithm, "with", #path, "waypoints")
+				
+				-- // Function to actually follow the path, uses your character as an example
+				
+				pathfinder:FollowPath(character, path)
+			else
+				print("No path found!")
+			end
+		end
+	end
+end)
+--]]
+
 -- // WIP
 
 local PathfindingService = game:GetService("PathfindingService")
@@ -13,8 +69,7 @@ function PathfindingModule.new()
 	self.algorithms = {
 		Roblox = function(start, goal) return self:RobloxPathfinding(start, goal) end,
 		AStar = function(start, goal, grid) return self:AStarPathfinding(start, goal, grid) end,
-		Dijkstra = function(start, goal, grid) return self:DijkstraPathfinding(start, goal, grid) end,
-		Grid = function(start, goal, grid) return self:GridPathfinding(start, goal, grid) end
+		Dijkstra = function(start, goal, grid) return self:DijkstraPathfinding(start, goal, grid) end
 	}
 
 	-- // Visualization properties
@@ -69,14 +124,16 @@ function PathfindingModule:GetNeighbors(position, grid, resolution)
 		Vector3.new(resolution, 0, resolution),
 		Vector3.new(resolution, 0, -resolution),
 		Vector3.new(-resolution, 0, resolution),
-		Vector3.new(-resolution, 0, -resolution)
+		Vector3.new(-resolution, 0, -resolution),
+		Vector3.new(0, resolution, 0),  -- Up
+		Vector3.new(0, -resolution, 0) -- Down
 	}
 
 	for _, offset in ipairs(offsets) do
 		local neighborPos = position + offset
 		local neighborKey = toHashVector3(neighborPos)
 
-		-- Check if the position exists in the grid
+		-- // Check if the position exists in the grid
 		if grid[neighborKey] then
 			table.insert(neighbors, grid[neighborKey])
 		end
@@ -186,7 +243,7 @@ function PathfindingModule:RobloxPathfinding(start, goal)
 end
 
 --------------------
--- A* PATHFINDER (Best for finding Optimal Paths)
+-- A* PATHFINDER (Best for finding Optimal Paths (More Cost Efficent), Not Recommened for 3D as it's commonly used in things like graphs and other 2D Spaces)
 --------------------
 function PathfindingModule:AStarPathfinding(start, goal, grid)
 	if not grid or not next(grid) then
@@ -283,54 +340,74 @@ end
 
 function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck)
 	center = center or Vector3.new(0, 0, 0)
-	size = size or Vector3.new(100, 1000, 100)
-	resolution = resolution or 2  -- // Distance between grid points
+	size = size or Vector3.new(100, 1000, 100) 
+	resolution = resolution or 2
 	heightCheck = heightCheck or true
 	local grid = {}
+
 	local halfSize = size / 2
 	local minPos = center - halfSize
 	local maxPos = center + halfSize
-	-- // Create raycast parameters
+
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
-	-- // Iterate through the grid space
+	params.IgnoreWater = true
+
+	local rayStartHeight = maxPos.Y + 50
 	local gridPoints = 0
+
+	local function toHashVector3(pos)
+		return pos.X .. "," .. pos.Y .. "," .. pos.Z
+	end
+
 	for x = minPos.X, maxPos.X, resolution do
 		for z = minPos.Z, maxPos.Z, resolution do
-			local top = Vector3.new(x, maxPos.Y, z)
-			local bottom = Vector3.new(x, minPos.Y, z)
+			local top = Vector3.new(x, rayStartHeight, z)
 			if heightCheck then
-				local result = workspace:Raycast(top, Vector3.new(0, -size.Y, 0), params)
-				if result then
+				local result = workspace:Raycast(top, Vector3.new(0, -size.Y - 50, 0), params)
+				if result then		
 					local pos = Vector3.new(
 						math.floor(x / resolution + 0.5) * resolution,
-						result.Position.Y,
+						result.Position.Y, -- // Use the exact height of the detected surface
 						math.floor(z / resolution + 0.5) * resolution
 					)
 					local key = toHashVector3(pos)
-					grid[key] = pos  -- // Store both key and the position
+					grid[key] = pos
 					gridPoints = gridPoints + 1
+				else
+					-- // Optional: Add a fallback for flat ground if no surface is hit
+					local fallbackPos = Vector3.new(
+						math.floor(x / resolution + 0.5) * resolution,
+						minPos.Y, -- // Default to base height if no surface
+						math.floor(z / resolution + 0.5) * resolution
+					)
+					local fallbackKey = toHashVector3(fallbackPos)
+					grid[fallbackKey] = fallbackPos
+					gridPoints = gridPoints + 1
+					print("No surface found at", top, "using fallback height:", minPos.Y)
 				end
 			else
-				-- // Just use a flat grid at a fixed height
+				-- // Flat grid at fixed height
 				local pos = Vector3.new(
 					math.floor(x / resolution + 0.5) * resolution,
 					minPos.Y,
 					math.floor(z / resolution + 0.5) * resolution
 				)
 				local key = toHashVector3(pos)
-				grid[key] = pos  -- // Store both key and the position
+				grid[key] = pos
 				gridPoints = gridPoints + 1
 			end
 		end
 	end
-	print("Created world grid with " .. gridPoints .. " points")
-	-- // Visualize the grid if enabled
 
-	if self.visualization.enabled then
+	print("Created world grid with " .. gridPoints .. " points")
+
+	-- // Visualize grid if enabled
+	if self.visualization and self.visualization.enabled then
 		self:VisualizeGrid(grid)
 	end
+
 	return grid
 end
 
@@ -346,8 +423,8 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 	local toKey = toHashVector3
 	local startKey = toKey(start)
 	local goalKey = toKey(goal)
-
-	-- // Validate start and goal
+	
+	-- Validate start and goal
 	if not grid[startKey] then
 		warn("Start position not in grid:", startKey)
 		return nil
@@ -361,7 +438,7 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 	local previous = {}
 	local openSet = newBinaryHeap()
 
-	-- // Add distances and add all nodes to openSet
+	-- Add distances and add all nodes to openSet
 	for posKey, pos in pairs(grid) do
 		distances[posKey] = math.huge
 		previous[posKey] = nil
@@ -369,7 +446,7 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 	end
 
 	distances[startKey] = 0
-	openSet = newBinaryHeap() -- // Reset openSet with correct distances
+	openSet = newBinaryHeap() -- Reset openSet with correct distances
 	openSet:push(start, 0)
 
 	local visited = {}
@@ -387,7 +464,7 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 			break
 		end
 
-		-- // Check each neighbor
+		-- Check each neighbor
 		for _, neighbor in ipairs(self:GetNeighbors(current, grid)) do
 			local neighborKey = toKey(neighbor)
 			if not visited[neighborKey] then
@@ -401,7 +478,7 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 		end
 	end
 
-	-- // Reconstruct path if goal was reached
+	-- Reconstruct path if goal was reached
 	if distances[goalKey] == math.huge then
 		warn("Dijkstra pathfinding could not find a path")
 		return nil
@@ -417,52 +494,6 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 
 	return path
 end
-
---------------------
--- GRID-BASED PATHFINDER (BREADTH-FIRST SEARCH, Used for sharp turns in a grid pattern, usually inaccurate though if you're using a large grid)
---------------------
-function PathfindingModule:GridPathfinding(start, goal, grid)
-	if not grid then
-		warn("Grid pathfinding requires a grid")
-		return nil
-	end
-
-	local queue = {start}
-	local visited = {[start] = true}
-	local cameFrom = {[start] = nil}
-
-	while #queue > 0 do
-		task.wait()
-		local current = table.remove(queue, 1)
-
-		if current == goal then
-			-- // Reconstruct path
-			local path = {}
-			local curr = current
-
-			while curr do
-				table.insert(path, 1, curr)
-				curr = cameFrom[curr]
-				task.wait()
-			end
-
-			return path
-		end
-
-		-- // Check each neighbor
-		for _, neighbor in ipairs(self:GetNeighbors(current, grid)) do
-			if not visited[neighbor] then
-				visited[neighbor] = true
-				cameFrom[neighbor] = current
-				table.insert(queue, neighbor)
-			end
-		end
-	end
-
-	warn("Grid pathfinding could not find a path")
-	return nil
-end
-
 --------------------
 -- VISUALIZATION FUNCTIONS
 --------------------

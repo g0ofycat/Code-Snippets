@@ -16,14 +16,14 @@ pathfinder:SetVisualization(true, { -- // Set to true to visualize grid
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 
-local grid = pathfinder:CreateWorldGrid()
+local grid = pathfinder:CreateWorldGrid(Vector3.new(0, 0, 0), Vector3.new(100, 1000, 100), 2, true) -- Center: Center of the grid, Size: Size of the grid. Resoulution: Distance between each point (Recommended: 2 since it needs to detect collision). HeightCheck: Raycasts each point to each for the hit parts Y, more accurate collisions
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		local mouse = player:GetMouse()
-		local raycastResult = workspace:Raycast(mouse.UnitRay.Origin, mouse.UnitRay.Direction * 1000)
+		local raycastResult = workspace:Raycast(mouse.UnitRay.Origin, mouse.UnitRay.Direction * 10000)
 
 		if raycastResult then
 			local startPosition = character.HumanoidRootPart.Position
@@ -35,7 +35,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 				startPosition, -- // Start position of the NPC (Vector3)
 				targetPosition, -- // End position of the NPC (Vector3)
 				grid, -- // Grid if you want to use the other pathfinding algorithms other than Roblox
-				{"AStar", "Roblox"}, -- // Possible Names: Roblox (PathfindingService), AStar (A* Pathfinding Algorithm), Dijkstra (Dijkstra Pathfinding Algorithm)
+				{"Grid", "Roblox"}, -- // Possible Names: Roblox (PathfindingService), AStar (A* Pathfinding Algorithm), Dijkstra (Dijkstra Pathfinding Algorithm), Grid (AStar without the diagonal vecotrs, moves in a grid-like pattern)
 				-- // The table above can store multiple pathfinding system as a fallback, if A* Fails then the normal Roblox one can be used. There can be as much as you want.
 				true -- // Set to true to visualize path
 			)
@@ -66,10 +66,25 @@ PathfindingModule.__index = PathfindingModule
 
 function PathfindingModule.new()
 	local self = setmetatable({}, PathfindingModule)
+	self.currentAlgorithm = nil
+
 	self.algorithms = {
-		Roblox = function(start, goal) return self:RobloxPathfinding(start, goal) end,
-		AStar = function(start, goal, grid) return self:AStarPathfinding(start, goal, grid) end,
-		Dijkstra = function(start, goal, grid) return self:DijkstraPathfinding(start, goal, grid) end
+		Roblox = function(start, goal) 
+			self.currentAlgorithm = "Roblox"
+			return self:RobloxPathfinding(start, goal) 
+		end,
+		AStar = function(start, goal, grid) 
+			self.currentAlgorithm = "AStar"
+			return self:AStarPathfinding(start, goal, grid) 
+		end,
+		Dijkstra = function(start, goal, grid) 
+			self.currentAlgorithm = "Dijkstra"
+			return self:DijkstraPathfinding(start, goal, grid) 
+		end,
+		Grid = function(start, goal, grid) 
+			self.currentAlgorithm = "Grid"
+			return self:AStarPathfinding(start, goal, grid) 
+		end
 	}
 
 	-- // Visualization properties
@@ -113,27 +128,38 @@ local function toHashVector3(vector)
 end
 
 function PathfindingModule:GetNeighbors(position, grid, resolution)
-	resolution = resolution or 2
+	resolution = resolution or self.resolution
 	local neighbors = {}
+
+	-- Base movement (4-directional for grid-based movement)
 	local offsets = {
-		Vector3.new(resolution, 0, 0),
-		Vector3.new(-resolution, 0, 0),
-		Vector3.new(0, 0, resolution),
-		Vector3.new(0, 0, -resolution),
-		-- // Diagonals (comment these out if you don't want diagonal movement)
-		Vector3.new(resolution, 0, resolution),
-		Vector3.new(resolution, 0, -resolution),
-		Vector3.new(-resolution, 0, resolution),
-		Vector3.new(-resolution, 0, -resolution),
+		Vector3.new(resolution, 0, 0),  -- Right
+		Vector3.new(-resolution, 0, 0), -- Left
+		Vector3.new(0, 0, resolution),  -- Forward
+		Vector3.new(0, 0, -resolution), -- Backward
 		Vector3.new(0, resolution, 0),  -- Up
-		Vector3.new(0, -resolution, 0) -- Down
+		Vector3.new(0, -resolution, 0), -- Down
 	}
 
+	-- If NOT using the Grid algorithm, allow diagonal movement
+	if self.currentAlgorithm ~= "Grid" then
+		local diagonalOffsets = {
+			Vector3.new(resolution, 0, resolution),
+			Vector3.new(resolution, 0, -resolution),
+			Vector3.new(-resolution, 0, resolution),
+			Vector3.new(-resolution, 0, -resolution),
+		}
+		for _, offset in ipairs(diagonalOffsets) do
+			table.insert(offsets, offset)
+		end
+	end
+
+	-- Process all valid neighbor positions
 	for _, offset in ipairs(offsets) do
 		local neighborPos = position + offset
 		local neighborKey = toHashVector3(neighborPos)
 
-		-- // Check if the position exists in the grid
+		-- Check if the position exists in the grid
 		if grid[neighborKey] then
 			table.insert(neighbors, grid[neighborKey])
 		end
@@ -247,7 +273,11 @@ end
 --------------------
 function PathfindingModule:AStarPathfinding(start, goal, grid)
 	if not grid or not next(grid) then
-		warn("AStar pathfinding requires a valid grid")
+		if self.currentAlgorithm == "Grid" then
+			warn("Grid pathfinding requires a valid grid")
+		else
+			warn("AStar pathfinding requires a valid grid")
+		end
 		return nil
 	end
 
@@ -255,6 +285,7 @@ function PathfindingModule:AStarPathfinding(start, goal, grid)
 	local goalKey = toHashVector3(goal)
 
 	-- // Try to snap start and goal to nearest grid positions if they're not exactly on grid points
+	
 	if not grid[startKey] then
 		local closestDist = math.huge
 		local closestPos = nil
@@ -334,76 +365,65 @@ function PathfindingModule:AStarPathfinding(start, goal, grid)
 		end
 	end
 
-	warn("AStar pathfinding could not find a path")
+	if self.currentAlgorithm == "Grid" then
+		warn("Grid pathfinding could not find a path")
+	else
+		warn("AStar pathfinding could not find a path")
+	end
 	return nil
 end
 
+-- // Time Complexity: O(n)
 function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck)
+	if heightCheck == nil then heightCheck = true end
+	self.resolution = resolution
 	center = center or Vector3.new(0, 0, 0)
-	size = size or Vector3.new(100, 1000, 100) 
-	resolution = resolution or 2
-	heightCheck = heightCheck or true
-	local grid = {}
+	size = size or Vector3.new(200, 1000, 200)
 
+	local grid = {}
 	local halfSize = size / 2
 	local minPos = center - halfSize
 	local maxPos = center + halfSize
 
 	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
 	params.IgnoreWater = true
+	
+	local overlapParams = OverlapParams.new()
+	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+	overlapParams.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
+
+	local partsInRegion = workspace.GetPartBoundsInBox(workspace, CFrame.new(center), size, overlapParams)
+
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = partsInRegion
 
 	local rayStartHeight = maxPos.Y + 50
 	local gridPoints = 0
 
-	local function toHashVector3(pos)
-		return pos.X .. "," .. pos.Y .. "," .. pos.Z
-	end
-
 	for x = minPos.X, maxPos.X, resolution do
 		for z = minPos.Z, maxPos.Z, resolution do
-			local top = Vector3.new(x, rayStartHeight, z)
+			local roundedX = math.floor(x / resolution + 0.5) * resolution
+			local roundedZ = math.floor(z / resolution + 0.5) * resolution
+
 			if heightCheck then
-				local result = workspace:Raycast(top, Vector3.new(0, -size.Y - 50, 0), params)
-				if result then		
-					local pos = Vector3.new(
-						math.floor(x / resolution + 0.5) * resolution,
-						result.Position.Y, -- // Use the exact height of the detected surface
-						math.floor(z / resolution + 0.5) * resolution
-					)
-					local key = toHashVector3(pos)
-					grid[key] = pos
+				local top = Vector3.new(roundedX, rayStartHeight, roundedZ)
+				local result = workspace:Raycast(top, Vector3.new(0, -size.Y - 100, 0), params)
+
+				if result then
+					local pos = Vector3.new(roundedX, result.Position.Y, roundedZ)
+					grid[toHashVector3(pos)] = pos
 					gridPoints = gridPoints + 1
-				else
-					-- // Optional: Add a fallback for flat ground if no surface is hit
-					local fallbackPos = Vector3.new(
-						math.floor(x / resolution + 0.5) * resolution,
-						minPos.Y, -- // Default to base height if no surface
-						math.floor(z / resolution + 0.5) * resolution
-					)
-					local fallbackKey = toHashVector3(fallbackPos)
-					grid[fallbackKey] = fallbackPos
-					gridPoints = gridPoints + 1
-					print("No surface found at", top, "using fallback height:", minPos.Y)
 				end
 			else
-				-- // Flat grid at fixed height
-				local pos = Vector3.new(
-					math.floor(x / resolution + 0.5) * resolution,
-					minPos.Y,
-					math.floor(z / resolution + 0.5) * resolution
-				)
-				local key = toHashVector3(pos)
-				grid[key] = pos
-				gridPoints = gridPoints + 1
+				local pos = Vector3.new(roundedX, minPos.Y, roundedZ)
+				grid[toHashVector3(pos)] = pos
+				gridPoints = gridPoints + 0.5
 			end
 		end
 	end
 
 	print("Created world grid with " .. gridPoints .. " points")
 
-	-- // Visualize grid if enabled
 	if self.visualization and self.visualization.enabled then
 		self:VisualizeGrid(grid)
 	end
@@ -423,7 +443,7 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 	local toKey = toHashVector3
 	local startKey = toKey(start)
 	local goalKey = toKey(goal)
-	
+
 	-- Validate start and goal
 	if not grid[startKey] then
 		warn("Start position not in grid:", startKey)
@@ -721,7 +741,7 @@ function PathfindingModule:FollowPath(character, path)
 	self.currentWaypointIndex = 1
 
 	-- // Use Humanoid.MoveToFinished instead of RunService.Heartbeat
-	
+
 	local function moveToNextWaypoint()
 		if self.currentWaypointIndex > #path then
 			humanoid:MoveTo(rootPart.Position) -- // Stop moving
@@ -739,7 +759,7 @@ function PathfindingModule:FollowPath(character, path)
 				humanoid.Jump = true
 			end
 		end
-	
+
 		humanoid:MoveTo(typeof(currentWaypoint) == "Vector3" and currentWaypoint or currentWaypoint.Position)
 
 		self.currentWaypointIndex += 1

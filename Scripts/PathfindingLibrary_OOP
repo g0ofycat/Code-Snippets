@@ -7,6 +7,7 @@ local PathfindingModule = {}
 PathfindingModule.__index = PathfindingModule
 
 -- // Create a new pathfinding system
+
 function PathfindingModule.new()
 	local self = setmetatable({}, PathfindingModule)
 	self.algorithms = {
@@ -30,6 +31,7 @@ function PathfindingModule.new()
 end
 
 -- // Find a path using the best available algorithm
+
 function PathfindingModule:FindBestPath(start, goal, grid, algorithmNames, visualize)
 	for _, name in ipairs(algorithmNames) do
 		local path = self.algorithms[name] and self.algorithms[name](start, goal, grid)
@@ -45,67 +47,119 @@ function PathfindingModule:FindBestPath(start, goal, grid, algorithmNames, visua
 	return nil, "No valid path found"
 end
 
--- // Create a grid from the Roblox world for pathfinding, Needed for all pathfinding Algorithms except Roblox
+-- // Create a grid from the Roblox world for pathfinding. (Needed for all pathfinding Algorithms except Roblox)
 
-function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck)
-	center = center or Vector3.new(0, 0, 0)
-	size = size or Vector3.new(100, 10, 100)
-	resolution = resolution or 2  -- // Distance between grid points
-	heightCheck = heightCheck or true
+--------------------
+-- HELPER FUNCTIONS
+--------------------
 
-	local grid = {}
-	local halfSize = size / 2
-	local minPos = center - halfSize
-	local maxPos = center + halfSize
+local function toHashVector3(vector)
+	return vector.X .. "," .. vector.Y .. "," .. vector.Z
+end
 
-	-- // Create raycast parameters
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
+function PathfindingModule:GetNeighbors(position, grid, resolution)
+	resolution = resolution or 2
+	local neighbors = {}
+	local offsets = {
+		Vector3.new(resolution, 0, 0),
+		Vector3.new(-resolution, 0, 0),
+		Vector3.new(0, 0, resolution),
+		Vector3.new(0, 0, -resolution),
+		-- // Diagonals (comment these out if you don't want diagonal movement)
+		Vector3.new(resolution, 0, resolution),
+		Vector3.new(resolution, 0, -resolution),
+		Vector3.new(-resolution, 0, resolution),
+		Vector3.new(-resolution, 0, -resolution)
+	}
 
-	-- // Iterate through the grid space
-	local gridPoints = 0
+	for _, offset in ipairs(offsets) do
+		local neighborPos = position + offset
+		local neighborKey = toHashVector3(neighborPos)
 
-	for x = minPos.X, maxPos.X, resolution do
-		for z = minPos.Z, maxPos.Z, resolution do
-			local top = Vector3.new(x, maxPos.Y, z)
-			local bottom = Vector3.new(x, minPos.Y, z)
+		-- Check if the position exists in the grid
+		if grid[neighborKey] then
+			table.insert(neighbors, grid[neighborKey])
+		end
+	end
 
-			if heightCheck then
-				-- // Cast a ray down to find the surface
-				local result = workspace:Raycast(top, Vector3.new(0, -size.Y, 0), params)
+	return neighbors
+end
 
-				if result then
-					local pos = Vector3.new(
-						math.floor(x / resolution + 0.5) * resolution,
-						result.Position.Y,
-						math.floor(z / resolution + 0.5) * resolution
-					)
-					grid[pos] = true
-					gridPoints = gridPoints + 1
-				end
+-- // All for A* Pathfinding
+
+local function heuristic(a, b)
+	return (b - a).Magnitude
+end
+
+local function stringToVector3(str)
+	local x, y, z = str:match("([^,]+),([^,]+),([^,]+)")
+	return Vector3.new(tonumber(x), tonumber(y), tonumber(z))
+end
+
+local function newBinaryHeap()
+	local heap = {size = 0}
+	local data = {}
+
+	local function swap(i, j)
+		data[i], data[j] = data[j], data[i]
+	end
+
+	local function bubbleUp(index)
+		while index > 1 do
+			local parent = math.floor(index / 2)
+			if data[index].fScore < data[parent].fScore then
+				swap(index, parent)
+				index = parent
 			else
-				-- // Just use a flat grid at a fixed height
-				local pos = Vector3.new(
-					math.floor(x / resolution + 0.5) * resolution,
-					minPos.Y,
-					math.floor(z / resolution + 0.5) * resolution
-				)
-				grid[pos] = true
-				gridPoints = gridPoints + 1
+				break
 			end
 		end
 	end
 
-	print("Created world grid with " .. gridPoints .. " points")
+	local function bubbleDown(index)
+		while true do
+			local smallest = index
+			local left = index * 2
+			local right = index * 2 + 1
 
-	-- // Visualize the grid if enabled
-	
-	if self.visualization.enabled then
-		self:VisualizeGrid(grid)
+			if left <= heap.size and data[left].fScore < data[smallest].fScore then
+				smallest = left
+			end
+			if right <= heap.size and data[right].fScore < data[smallest].fScore then
+				smallest = right
+			end
+
+			if smallest == index then
+				break
+			end
+
+			swap(index, smallest)
+			index = smallest
+		end
 	end
-	return grid
 
+	function heap:push(node, fScore)
+		heap.size = heap.size + 1
+		data[heap.size] = {node = node, fScore = fScore}
+		bubbleUp(heap.size)
+	end
+
+	function heap:pop()
+		if heap.size == 0 then return nil end
+		local min = data[1]
+		data[1] = data[heap.size]
+		heap.size = heap.size - 1
+		if heap.size > 0 then
+			bubbleDown(1)
+		end
+		return min.node, min.fScore
+	end
+
+	function heap:isEmpty()
+		return heap.size == 0
+	end
+
+	return heap
 end
 
 --------------------
@@ -135,97 +189,90 @@ end
 -- A* PATHFINDER (Best for finding Optimal Paths)
 --------------------
 function PathfindingModule:AStarPathfinding(start, goal, grid)
-	if not grid then
-		warn("AStar pathfinding requires a grid")
+	if not grid or not next(grid) then
+		warn("AStar pathfinding requires a valid grid")
 		return nil
 	end
 
-	local function toKey(pos)
-		return pos.X .. "," .. pos.Y .. "," .. pos.Z
+	local startKey = toHashVector3(start)
+	local goalKey = toHashVector3(goal)
+
+	-- // Try to snap start and goal to nearest grid positions if they're not exactly on grid points
+	if not grid[startKey] then
+		local closestDist = math.huge
+		local closestPos = nil
+		for key, pos in pairs(grid) do
+			local dist = (pos - start).Magnitude
+			if dist < closestDist then
+				closestDist = dist
+				closestPos = pos
+			end
+		end
+		if closestPos and closestDist < 5 then
+			start = closestPos
+			startKey = toHashVector3(start)
+		else
+			warn("Start position not in grid and no nearby point found: ", startKey)
+			return nil
+		end
 	end
 
-	local function heuristic(a, b)
-		return (b - a).Magnitude
+	if not grid[goalKey] then
+		local closestDist = math.huge
+		local closestPos = nil
+		for key, pos in pairs(grid) do
+			local dist = (pos - goal).Magnitude
+			if dist < closestDist then
+				closestDist = dist
+				closestPos = pos
+			end
+		end
+		if closestPos and closestDist < 5 then
+			goal = closestPos
+			goalKey = toHashVector3(goal)
+		else
+			warn("Goal position not in grid and no nearby point found: ", goalKey)
+			return nil
+		end
 	end
-	
-	local startKey = toKey(start)
-	local goalKey = toKey(goal)
 
-	if not grid[startKey] and not grid[start] or not grid[goalKey] and not grid[goal] then
-		warn("Start or goal position not in grid")
-		return nil
-	end
+	start = grid[startKey]
+	goal = grid[goalKey]
 
-	local openSet, closedSet = {}, {}
-	table.insert(openSet, start)
+	local openSet = newBinaryHeap()
+	openSet:push(start, 0)
 
 	local cameFrom = {}
 	local gScore = {}
 	local fScore = {}
 
-	for pos, _ in pairs(grid) do
-		local key = toKey(pos)
-		gScore[key] = math.huge
-		fScore[key] = math.huge
-	end
-
 	gScore[startKey] = 0
 	fScore[startKey] = heuristic(start, goal)
 
-	while #openSet > 0 do
-		local current = nil
-		local lowestScore = math.huge
-		local currentIndex = 0
+	while not openSet:isEmpty() do
+		local current = openSet:pop()
+		local currentKey = toHashVector3(current)
 
-		for i, node in ipairs(openSet) do
-			local key = toKey(node)
-			if fScore[key] and fScore[key] < lowestScore then
-				lowestScore = fScore[key]
-				current = node
-				currentIndex = i
-			end
-		end
-
-		if current == goal then
+		if current == goal or currentKey == goalKey then
 			local path = {}
 			local curr = current
 			while curr do
 				table.insert(path, 1, curr)
-				local currKey = toKey(curr)
+				local currKey = toHashVector3(curr)
 				curr = cameFrom[currKey]
 			end
 			return path
 		end
 
-		table.remove(openSet, currentIndex)
-		closedSet[toKey(current)] = true
+		for _, neighbor in ipairs(self:GetNeighbors(current, grid) or {}) do
+			local neighborKey = toHashVector3(neighbor)
+			local tentativeGScore = (gScore[currentKey] or math.huge) + (neighbor - current).Magnitude
 
-		local neighbors = self:GetNeighbors(current, grid)
-		for _, neighbor in ipairs(neighbors or {}) do
-			local neighborKey = toKey(neighbor)
-			if not closedSet[neighborKey] then
-				local tentativeGScore = gScore[toKey(current)] + (neighbor - current).Magnitude
-
-				local isNewPath = false
-				local foundInOpen = false
-				for i, openNode in ipairs(openSet) do
-					if toKey(openNode) == neighborKey then
-						foundInOpen = true
-						break
-					end
-				end
-				if not foundInOpen then
-					table.insert(openSet, neighbor)
-					isNewPath = true
-				elseif tentativeGScore < gScore[neighborKey] then
-					isNewPath = true
-				end
-
-				if isNewPath then
-					cameFrom[neighborKey] = current
-					gScore[neighborKey] = tentativeGScore
-					fScore[neighborKey] = gScore[neighborKey] + heuristic(neighbor, goal)
-				end
+			if tentativeGScore < (gScore[neighborKey] or math.huge) then
+				cameFrom[neighborKey] = current
+				gScore[neighborKey] = tentativeGScore
+				fScore[neighborKey] = tentativeGScore + heuristic(neighbor, goal)
+				openSet:push(neighbor, fScore[neighborKey])
 			end
 		end
 	end
@@ -234,79 +281,141 @@ function PathfindingModule:AStarPathfinding(start, goal, grid)
 	return nil
 end
 
+function PathfindingModule:CreateWorldGrid(center, size, resolution, heightCheck)
+	center = center or Vector3.new(0, 0, 0)
+	size = size or Vector3.new(100, 1000, 100)
+	resolution = resolution or 2  -- // Distance between grid points
+	heightCheck = heightCheck or true
+	local grid = {}
+	local halfSize = size / 2
+	local minPos = center - halfSize
+	local maxPos = center + halfSize
+	-- // Create raycast parameters
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
+	-- // Iterate through the grid space
+	local gridPoints = 0
+	for x = minPos.X, maxPos.X, resolution do
+		for z = minPos.Z, maxPos.Z, resolution do
+			local top = Vector3.new(x, maxPos.Y, z)
+			local bottom = Vector3.new(x, minPos.Y, z)
+			if heightCheck then
+				local result = workspace:Raycast(top, Vector3.new(0, -size.Y, 0), params)
+				if result then
+					local pos = Vector3.new(
+						math.floor(x / resolution + 0.5) * resolution,
+						result.Position.Y,
+						math.floor(z / resolution + 0.5) * resolution
+					)
+					local key = toHashVector3(pos)
+					grid[key] = pos  -- // Store both key and the position
+					gridPoints = gridPoints + 1
+				end
+			else
+				-- // Just use a flat grid at a fixed height
+				local pos = Vector3.new(
+					math.floor(x / resolution + 0.5) * resolution,
+					minPos.Y,
+					math.floor(z / resolution + 0.5) * resolution
+				)
+				local key = toHashVector3(pos)
+				grid[key] = pos  -- // Store both key and the position
+				gridPoints = gridPoints + 1
+			end
+		end
+	end
+	print("Created world grid with " .. gridPoints .. " points")
+	-- // Visualize the grid if enabled
+
+	if self.visualization.enabled then
+		self:VisualizeGrid(grid)
+	end
+	return grid
+end
+
 --------------------
 -- DIJKSTRA PATHFINDER (Used for mainly finding the shortest path between 2 nodes)
 --------------------
 function PathfindingModule:DijkstraPathfinding(start, goal, grid)
-	if not grid then
-		warn("Dijkstra pathfinding requires a grid")
+	if not grid or not next(grid) then
+		warn("Dijkstra pathfinding requires a valid grid")
+		return nil
+	end
+
+	local toKey = toHashVector3
+	local startKey = toKey(start)
+	local goalKey = toKey(goal)
+
+	-- // Validate start and goal
+	if not grid[startKey] then
+		warn("Start position not in grid:", startKey)
+		return nil
+	end
+	if not grid[goalKey] then
+		warn("Goal position not in grid:", goalKey)
 		return nil
 	end
 
 	local distances = {}
 	local previous = {}
-	local nodes = {}
+	local openSet = newBinaryHeap()
 
-	-- // Initialize
-	for pos, _ in pairs(grid) do
-		distances[pos] = math.huge
-		previous[pos] = nil
-		table.insert(nodes, pos)
+	-- // Add distances and add all nodes to openSet
+	for posKey, pos in pairs(grid) do
+		distances[posKey] = math.huge
+		previous[posKey] = nil
+		openSet:push(pos, math.huge)
 	end
 
-	distances[start] = 0
+	distances[startKey] = 0
+	openSet = newBinaryHeap() -- // Reset openSet with correct distances
+	openSet:push(start, 0)
 
-	while #nodes > 0 do
-		task.wait()
-		-- // Find node with minimum distance
-		local minDistance = math.huge
-		local minIndex = 0
-		local current = nil
+	local visited = {}
 
-		for i, node in ipairs(nodes) do
-			if distances[node] < minDistance then
-				minDistance = distances[node]
-				minIndex = i
-				current = node
-			end
+	while not openSet:isEmpty() do
+		local current, currentDistance = openSet:pop()
+		local currentKey = toKey(current)
+
+		if visited[currentKey] then
+			continue
 		end
+		visited[currentKey] = true
 
-		-- // If we can't find a node or reached the goal, break
-		if minDistance == math.huge or current == goal then
+		if current == goal then
 			break
 		end
 
-		-- // Remove current from unvisited set
-		table.remove(nodes, minIndex)
-
 		-- // Check each neighbor
 		for _, neighbor in ipairs(self:GetNeighbors(current, grid)) do
-			if table.find(nodes, neighbor) then
-				local alt = distances[current] + (neighbor - current).Magnitude
-				if alt < distances[neighbor] then
-					distances[neighbor] = alt
-					previous[neighbor] = current
+			local neighborKey = toKey(neighbor)
+			if not visited[neighborKey] then
+				local alt = distances[currentKey] + (neighbor - current).Magnitude
+				if alt < (distances[neighborKey] or math.huge) then
+					distances[neighborKey] = alt
+					previous[neighborKey] = current
+					openSet:push(neighbor, alt)
 				end
 			end
 		end
 	end
 
-	-- // If goal was reached, reconstruct path
-	if previous[goal] or goal == start then
-		local path = {}
-		local curr = goal
-
-		while curr do
-			table.insert(path, 1, curr)
-			curr = previous[curr]
-			task.wait()
-		end
-
-		return path
+	-- // Reconstruct path if goal was reached
+	if distances[goalKey] == math.huge then
+		warn("Dijkstra pathfinding could not find a path")
+		return nil
 	end
 
-	warn("Dijkstra pathfinding could not find a path")
-	return nil
+	local path = {}
+	local curr = goal
+	while curr do
+		table.insert(path, 1, curr)
+		local currKey = toKey(curr)
+		curr = previous[currKey]
+	end
+
+	return path
 end
 
 --------------------
@@ -352,62 +461,6 @@ function PathfindingModule:GridPathfinding(start, goal, grid)
 
 	warn("Grid pathfinding could not find a path")
 	return nil
-end
-
---------------------
--- HELPER FUNCTIONS
---------------------
-function PathfindingModule:GetNeighbors(node, grid)
-	local neighbors = {}
-
-	-- // Basic 4-directional movement (can be extended to 8-directional or 3D)
-	local directions = {
-		Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0),
-		Vector3.new(0, 0, 1), Vector3.new(0, 0, -1)
-	}
-
-	-- // Add diagonals for smoother paths
-	table.insert(directions, Vector3.new(1, 0, 1))
-	table.insert(directions, Vector3.new(1, 0, -1))
-	table.insert(directions, Vector3.new(-1, 0, 1))
-	table.insert(directions, Vector3.new(-1, 0, -1))
-
-	-- // Check if node is valid in our grid
-	local function isValidNode(pos)
-		-- // If grid is a table with positions as keys
-		if type(grid) == "table" then
-			if grid[pos] ~= nil then
-				return true
-			end
-
-			-- // If grid is a function that checks validity
-			if type(grid) == "function" then
-				return grid(pos)
-			end
-
-			-- // If grid has a IsValidPosition method
-			if type(grid) == "table" and grid.IsValidPosition then
-				return grid:IsValidPosition(pos)
-			end
-		end
-
-		-- // Default to checking if position is walkable using Roblox's WorldRoot
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
-
-		local result = workspace:Raycast(pos + Vector3.new(0, 5, 0), Vector3.new(0, -10, 0), params)
-		return result ~= nil
-	end
-
-	for _, dir in ipairs(directions) do
-		local neighbor = node + dir
-		if isValidNode(neighbor) then
-			table.insert(neighbors, neighbor)
-		end
-	end
-
-	return neighbors
 end
 
 --------------------
@@ -461,10 +514,10 @@ function PathfindingModule:VisualizePath(path, customOptions)
 		return
 	end
 
-	-- Clear existing visualization
+	-- // Clear existing visualization
 	self:ClearVisualization()
 
-	-- Apply custom options
+	-- // Apply custom options
 	local options = {}
 	for k, v in pairs(self.visualization) do
 		options[k] = v
@@ -475,22 +528,22 @@ function PathfindingModule:VisualizePath(path, customOptions)
 		end
 	end
 
-	-- Create the visualization folder if needed
+	-- // Create Folder
 	if not self.visualFolder then
 		self:CreateVisualizationFolder()
 	end
 
-	-- Extract positions from waypoints
+	-- // Extract positions from waypoints
 	local positions = {}
 	for i, waypoint in ipairs(path) do
 		local position
 
-		-- Handle different waypoint types
+		-- // Handle different waypoint types
 		if typeof(waypoint) == "Vector3" then
 			position = waypoint
 		elseif typeof(waypoint) == "Instance" then
 			position = waypoint.Position
-		elseif typeof(waypoint) == "PathWaypoint" then -- Add explicit check for PathWaypoint
+		elseif typeof(waypoint) == "PathWaypoint" then 
 			position = waypoint.Position
 		elseif type(waypoint) == "table" and waypoint.Position then
 			position = waypoint.Position
@@ -502,9 +555,8 @@ function PathfindingModule:VisualizePath(path, customOptions)
 		positions[i] = position
 	end
 
-	-- Create visualization elements
 	for i, position in ipairs(positions) do
-		-- Create point
+
 		local point = Instance.new("Part")
 		point.Name = "PathPoint_" .. i
 		point.Shape = Enum.PartType.Ball
@@ -517,7 +569,6 @@ function PathfindingModule:VisualizePath(path, customOptions)
 		point.Color = options.pointColor
 		point.Parent = self.visualFolder
 
-		-- Create line to next point
 		if i < #positions then
 			local nextPosition = positions[i + 1]
 			local direction = (nextPosition - position)
@@ -529,7 +580,6 @@ function PathfindingModule:VisualizePath(path, customOptions)
 				line.Name = "PathLine_" .. i
 				line.Size = Vector3.new(options.lineSize, options.lineSize, distance)
 
-				-- Create proper orientation
 				local midpoint = position + direction * (distance / 2)
 				line.CFrame = CFrame.lookAt(midpoint, nextPosition)
 
@@ -547,6 +597,7 @@ function PathfindingModule:VisualizePath(path, customOptions)
 end
 
 -- // Visualize grid points for debugging
+
 function PathfindingModule:VisualizeGrid(grid, customOptions)
 	if not grid then return end
 	if not self.visualization.enabled then return end
@@ -576,16 +627,12 @@ function PathfindingModule:VisualizeGrid(grid, customOptions)
 	local count = 0
 	for pos, _ in pairs(grid) do
 		count = count + 1
-		if count > 10000 then  -- // Can set this to a higher value
-			warn("Grid is too large to fully visualize (>10000 points). Showing first 10000 points.")
-			break
-		end
 
 		local point = Instance.new("Part")
 		point.Name = "GridPoint_" .. count
 		point.Shape = Enum.PartType.Ball
-		point.Size = Vector3.new(options.pointSize * 0.5, options.pointSize * 0.5, options.pointSize * 0.5)
-		point.Position = pos
+		point.Size = Vector3.new(tonumber(options.pointSize) * 0.5, tonumber(options.pointSize) * 0.5, tonumber(options.pointSize) * 0.5)
+		point.Position = stringToVector3(pos)
 		point.Anchored = true
 		point.CanCollide = false
 		point.Material = Enum.Material.Neon
@@ -661,8 +708,8 @@ function PathfindingModule:FollowPath(character, path)
 				humanoid.Jump = true
 			end
 		end
-
-		humanoid:MoveTo(currentWaypoint.Position)
+	
+		humanoid:MoveTo(typeof(currentWaypoint) == "Vector3" and currentWaypoint or currentWaypoint.Position)
 
 		self.currentWaypointIndex += 1
 	end

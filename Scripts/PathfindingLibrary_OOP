@@ -703,6 +703,25 @@ function PathfindingModule:ClearVisualization()
 	return self
 end
 
+function PathfindingModule:RemoveWaypointVisualizer(index)
+	if not self.visualFolder then return end
+
+	-- // Remove the point
+	local pointName = "PathPoint_" .. index
+	local point = self.visualFolder:FindFirstChild(pointName)
+	if point then
+		point:Destroy()
+	end
+
+	-- // Remove the line leading to this point (if it exists)
+	
+	local lineName = "PathLine_" .. index
+	local line = self.visualFolder:FindFirstChild(lineName)
+	if line then
+		line:Destroy()
+	end
+end
+
 --------------------
 -- FOLLOW PATH FUNCTION (Function to actually move the npc to the it)
 --------------------
@@ -726,22 +745,35 @@ function PathfindingModule:FollowPath(character, path)
 		return
 	end
 
-	-- // Clean up any existing connection
+	-- // Clean up any existing connections
 	if self.pathConnection then
 		self.pathConnection:Disconnect()
 		self.pathConnection = nil
 	end
 
+	if self.stateConnection then
+		self.stateConnection:Disconnect()
+		self.stateConnection = nil
+	end
+
 	self.currentWaypointIndex = 1
 
-	-- // Use Humanoid.MoveToFinished instead of RunService.Heartbeat
-
 	local function moveToNextWaypoint()
+		-- // Remove the visualizer for the previous waypoint (if not the first)
+		if self.currentWaypointIndex > 1 then
+			self:RemoveWaypointVisualizer(self.currentWaypointIndex - 1)
+		end
+
 		if self.currentWaypointIndex > #path then
 			humanoid:MoveTo(rootPart.Position) -- // Stop moving
 			print("Path completed. Pathfollowing stopped.")
-			PathfindingModule:ClearVisualization()
-			self.pathConnection:Disconnect()
+			self:ClearVisualization() -- // Clear any remaining visualizers
+			if self.pathConnection then
+				self.pathConnection:Disconnect()
+			end
+			if self.stateConnection then
+				self.stateConnection:Disconnect()
+			end
 			return
 		end
 
@@ -749,11 +781,12 @@ function PathfindingModule:FollowPath(character, path)
 
 		-- // Handle jumping if required
 		if typeof(currentWaypoint) == "PathWaypoint" and currentWaypoint.Action == Enum.PathWaypointAction.Jump then
-			if humanoid:GetState() ~= Enum.HumanoidStateType.Jumping then
-				humanoid.Jump = true
+			if humanoid.FloorMaterial ~= Enum.Material.Air then
+				humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 			end
 		end
 
+		-- // Move to current waypoint
 		humanoid:MoveTo(typeof(currentWaypoint) == "Vector3" and currentWaypoint or currentWaypoint.Position)
 
 		self.currentWaypointIndex += 1

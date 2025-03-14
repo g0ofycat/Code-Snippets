@@ -65,6 +65,7 @@ PathfindingModule.__index = PathfindingModule
 function PathfindingModule.new()
 	local self = setmetatable({}, PathfindingModule)
 	self.currentAlgorithm = nil
+	self.resolution = 1
 
 	self.algorithms = {
 		Roblox = function(start, goal) 
@@ -105,7 +106,7 @@ function PathfindingModule:FindBestPath(start: Vector3, goal: Vector3, grid: Ins
 		local path = self.algorithms[name] and self.algorithms[name](start, goal, grid)
 		if path then 
 			-- // Visualize the path if requested and visualization is enabled
-			if visualize then
+			if visualize then -- // Dont check for the self visualization as those are 2 seperate visualizations
 				self:VisualizePath(path)
 			end
 
@@ -155,7 +156,7 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 	-- Raycast parameters for collision detection
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = {game.Players.LocalPlayer.Character} -- Exclude the player or NPC
+	raycastParams.FilterDescendantsInstances = {}
 	raycastParams.IgnoreWater = true
 
 	-- Process all valid neighbor positions
@@ -386,99 +387,78 @@ function PathfindingModule:AStarPathfinding(start, goal, grid)
 end
 
 -- // Time Complexity: O(n)
-function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, heightCheck: boolean, bufferDistance: number?)
-	if heightCheck == nil then heightCheck = true end
-	bufferDistance = bufferDistance or 2 -- // Default buffer distance from walls (adjustable)
+function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, heightCheck: boolean?, bufferDistance: number?)
+	heightCheck = heightCheck ~= false
+	bufferDistance = bufferDistance or 2
 	self.resolution = resolution
 
 	local grid = {}
-	local halfSize = size / 2
+	local halfSize = size * 0.5
 	local minPos = center - halfSize
 	local maxPos = center + halfSize
 
+	-- // compute raycast parameters once
 	local raycastParams = RaycastParams.new()
 	raycastParams.IgnoreWater = true
+	raycastParams.FilterType = Enum.RaycastFilterType.Include
+
+	-- // Cache common vectors and values
+	local rayStartHeight = maxPos.Y + 50
+	local downVector = Vector3.new(0, -size.Y - 100, 0)
+	local upOffset = Vector3.new(0, 1, 0)
+	local gridPoints = 0
+
+	-- // Pre-compute direction vectors with buffer
+	local directions = {
+		Vector3.new(bufferDistance, 0, 0),
+		Vector3.new(-bufferDistance, 0, 0),
+		Vector3.new(0, 0, bufferDistance),
+		Vector3.new(0, 0, -bufferDistance),
+	}
 
 	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
-	--overlapParams.FilterDescendantsInstances = {game.Players.LocalPlayer.Character} -- // Adjust as needed
-
 	local partsInRegion = workspace:GetPartBoundsInBox(CFrame.new(center), size, overlapParams)
-	raycastParams.FilterType = Enum.RaycastFilterType.Include
 	raycastParams.FilterDescendantsInstances = partsInRegion
 
-	local rayStartHeight = maxPos.Y + 50
-	local gridPoints = 0
-
+	-- // Batch process grid points
 	for x = minPos.X, maxPos.X, resolution do
+		local roundedX = math.round(x / resolution) * resolution
 		for z = minPos.Z, maxPos.Z, resolution do
-			local roundedX = math.floor(x / resolution + 0.5) * resolution
-			local roundedZ = math.floor(z / resolution + 0.5) * resolution
+			local roundedZ = math.round(z / resolution) * resolution
+			local pos
 
 			if heightCheck then
-				-- // Find the ground height
 				local top = Vector3.new(roundedX, rayStartHeight, roundedZ)
-				local result = workspace:Raycast(top, Vector3.new(0, -size.Y - 100, 0), raycastParams)
+				local result = workspace:Raycast(top, downVector, raycastParams)
 
-				if result then
-					local pos = Vector3.new(roundedX, result.Position.Y, roundedZ)
-
-					-- // Check for nearby walls with raycasts in all directions
-					
-					local isTooCloseToWall = false
-					local directions = {
-						Vector3.new(bufferDistance, 0, 0),   -- // Right
-						Vector3.new(-bufferDistance, 0, 0),  -- // Left
-						Vector3.new(0, 0, bufferDistance),   -- // Forward
-						Vector3.new(0, 0, -bufferDistance),  -- // Backward
-					}
-
-					for _, direction in ipairs(directions) do
-						local rayOrigin = pos + Vector3.new(0, 1, 0) -- Slightly above ground
-						local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
-						if rayResult and (rayResult.Position - rayOrigin).Magnitude < bufferDistance then
-							isTooCloseToWall = true
-							break
-						end
-					end
-
-					-- // Only add the node if it’s not too close to a wall
-					if not isTooCloseToWall then
-						grid[toHashVector3(pos)] = pos
-						gridPoints = gridPoints + 1
-					end
-				end
+				if not result then continue end
+				pos = Vector3.new(roundedX, result.Position.Y, roundedZ)
 			else
-				local pos = Vector3.new(roundedX, minPos.Y, roundedZ)
-				-- // Same wall proximity check for non-height-checked grids
-				local isTooCloseToWall = false
-				local directions = {
-					Vector3.new(bufferDistance, 0, 0),
-					Vector3.new(-bufferDistance, 0, 0),
-					Vector3.new(0, 0, bufferDistance),
-					Vector3.new(0, 0, -bufferDistance),
-				}
+				pos = Vector3.new(roundedX, minPos.Y, roundedZ)
+			end
 
-				for _, direction in ipairs(directions) do
-					local rayOrigin = pos + Vector3.new(0, 1, 0)
-					local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
-					if rayResult and (rayResult.Position - rayOrigin).Magnitude < bufferDistance then
-						isTooCloseToWall = true
-						break
-					end
-				end
+			local rayOrigin = pos + upOffset
+			local isTooCloseToWall = false
 
-				if not isTooCloseToWall then
-					grid[toHashVector3(pos)] = pos
-					gridPoints = gridPoints + 0.5
+			for _, direction in directions do -- // Using cached directions
+				local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
+				if rayResult and (rayResult.Position - rayOrigin).Magnitude < bufferDistance then
+					isTooCloseToWall = true
+					break
 				end
+			end
+
+			if not isTooCloseToWall then
+				grid[toHashVector3(pos)] = pos
+				gridPoints = gridPoints + (heightCheck and 1 or 0.5)
 			end
 		end
 	end
 
 	print("Created world grid with " .. gridPoints .. " points")
 
-	if self.visualization and self.visualization.enabled then
+	if self.visualization.enabled then -- Optional chaining
 		self:VisualizeGrid(grid)
 	end
 
@@ -627,12 +607,13 @@ end
 
 -- // Create folder to store visualization objects
 function PathfindingModule:CreateVisualizationFolder()
-	if not self.visualFolder then
-		self.visualFolder = Instance.new("Folder")
+	self.visualFolder = workspace:FindFirstChild("PathfindingVisualization") or Instance.new("Folder")
+	
+	if not self.visualFolder.Parent then
 		self.visualFolder.Name = "PathfindingVisualization"
 		self.visualFolder.Parent = workspace
 	end
-
+	
 	return self.visualFolder
 end
 
@@ -840,7 +821,9 @@ function PathfindingModule:FollowPath(character, path)
 	end
 
 	self.currentWaypointIndex = 1
-
+	
+	local start = tick()
+	
 	local function moveToNextWaypoint()
 		-- // Remove the visualizer for the previous waypoint (if not the first)
 		if self.currentWaypointIndex > 1 then
@@ -850,8 +833,9 @@ function PathfindingModule:FollowPath(character, path)
 		if self.currentWaypointIndex > #path then
 			humanoid:MoveTo(rootPart.Position)
 			print("Path completed. Pathfollowing stopped.")
+			print("Time taken: " .. tick() - start .. " seconds. ("..self.currentAlgorithm..")")
 			self:ClearVisualization() -- // Clear any remaining visualizers
-			PathfindingModule:StopFollowing()
+			self:StopFollowing()
 			return
 		end
 

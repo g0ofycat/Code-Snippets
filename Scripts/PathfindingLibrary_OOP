@@ -828,6 +828,7 @@ function PathfindingModule:FollowPath(character, path)
 	end
 
 	-- // Clean up any existing connections
+	
 	if self.pathConnection then
 		self.pathConnection:Disconnect()
 		self.pathConnection = nil
@@ -847,15 +848,10 @@ function PathfindingModule:FollowPath(character, path)
 		end
 
 		if self.currentWaypointIndex > #path then
-			humanoid:MoveTo(rootPart.Position) -- // Stop moving
+			humanoid:MoveTo(rootPart.Position)
 			print("Path completed. Pathfollowing stopped.")
 			self:ClearVisualization() -- // Clear any remaining visualizers
-			if self.pathConnection then
-				self.pathConnection:Disconnect()
-			end
-			if self.stateConnection then
-				self.stateConnection:Disconnect()
-			end
+			PathfindingModule:StopFollowing()
 			return
 		end
 

@@ -31,7 +31,7 @@ local SLIDE_THRESHOLD = 60  -- // Degrees; slope angle to trigger sliding
 
 -- // Network optimization
 local sendInterval = 1/30  -- // How fast the client updates the server, 30 FPS
-local movementThreshold = 0.01  -- // Increased threshold for more efficient networking
+local movementThreshold = 0.01  -- // How much the player needs to go in order to trigger movement
 local lastSentTime = 0
 local lastSentVelocity = Vector3.zero
 local lastSentCFrame = CFrame.new()

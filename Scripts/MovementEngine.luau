@@ -17,26 +17,27 @@ local VectorForces = PlayerGui.Keys:WaitForChild("VectorForces")
 
 -- // Movement Variables
 local baseSpeed = 30  -- // Base movement speed
-local acceleration = 3  -- // Rate of speed increase
-local deceleration = 6  -- // Rate of speed decrease
+local acceleration = 5  -- // Rate of speed increase
+local deceleration = 4  -- // Rate of speed decrease
 local turnSpeed = 8  -- // Speed of rotation
 local gravityForce = workspace.Gravity  -- // Gravity strength from workspace
-local groundCheckDistance = 2.25  -- // Distance to check for ground
-local terminalVelocity = -700  -- // Maximum fall speed
+local groundCheckDistance = 2.5  -- // Distance to check for ground
+local terminalVelocity = -1000  -- // Maximum fall speed
+local horizontalTerminalVelocity = 1500 -- // Maximum horizontal speed
 local airResistance = 80  -- // Resistance when in air
-local jumpPower = 50  -- // Force of jump
-local AIR_CONTROL = 14  -- // Control factor while in air
-local SLIDE_FRICTION = 0.1  -- // Low friction for sliding
-local SLIDE_THRESHOLD = 60  -- // Degrees; slope angle to trigger sliding
+local jumpPower = 40  -- // Force of jump
+local AIR_CONTROL = 13  -- // Control factor while in air
+local SLIDE_FRICTION = 0.05 -- // Low friction for sliding
+local SLIDE_THRESHOLD = 45  -- // Degrees; slope angle to trigger sliding
 
 -- // Network optimization
-local sendInterval = 1/30  -- // How fast the client updates the server, 30 FPS
+local sendInterval = 1/60  -- // How fast the client updates the server
 local lastSentTime = 0
 local lastSentVelocity = Vector3.zero
 local lastSentCFrame = CFrame.new()
 
 -- // Performance measures
-local groundCheckInterval = 1/10  -- // Check ground at 30 FPS, optomization reasons
+local groundCheckInterval = 1/20  -- // How fast it raycasts to the ground for gravity
 local lastGroundCheckTime = 0
 local cachedGroundInfo = {false, false, 0}  -- // {isGrounded, canStand, slopeAngle}
 
@@ -50,19 +51,23 @@ local isSliding = false  -- // Whether character is sliding
 local raycastParams = RaycastParams.new()  -- // Parameters for raycasting
 raycastParams.FilterType = Enum.RaycastFilterType.Exclude  -- // Exclude filter for raycast
 raycastParams.FilterDescendantsInstances = {rigHead, rigBody, character}
+local VECTOR_ZERO = Vector3.zero
 
 -- // Memory management
-local connections = {}  -- // Store connections for cleanup
+local connections = {}
+
+-- // UI update throttling
+local uiUpdateInterval = 0.1
+local lastUiUpdateTime = 0
 
 local function checkGround()
-	-- // Raycasting every RenderStepped takes up alot of memory, so we can apply it at a fixed rate.
 	local currentTime = tick()
 	if currentTime - lastGroundCheckTime >= groundCheckInterval then
 		local raycastResult = workspace:Raycast(rigBody.Position, Vector3.new(0, -groundCheckDistance, 0), raycastParams)
 		if raycastResult then
 			local normal = raycastResult.Normal
-			local slopeAngle = math.deg(math.acos(normal.Y))  -- // Angle from vertical
-			cachedGroundInfo = {true, slopeAngle <= 90, slopeAngle}  -- // isGrounded, canStand, slopeAngle
+			local slopeAngle = math.deg(math.acos(normal.Y))
+			cachedGroundInfo = {true, slopeAngle <= 90, slopeAngle}
 		else
 			cachedGroundInfo = {false, false, 0}
 		end
@@ -71,21 +76,18 @@ local function checkGround()
 	return unpack(cachedGroundInfo)
 end
 
--- // Cleanup function
 local function cleanupConnections()
 	for _, connection in pairs(connections) do
 		if connection.Connected then
-			connection.Disconnect(connection)
+			connection:Disconnect()
 		end
 	end
 	connections = {}
 end
 
--- // Main physics update function (Gravity, Movement Controls, Sliding, Jumping, etc.)
 local function updatePhysics(dt)
 	local moveDir = humanoid.MoveDirection
 	local moveMagnitude = moveDir.Magnitude
-
 	local grounded, canStand, slopeAngle = checkGround()
 	local justLanded = grounded and not isGrounded
 	isGrounded = grounded
@@ -102,7 +104,7 @@ local function updatePhysics(dt)
 			local slopeDir = Vector3.new(horizontalVelocity.X, 0, horizontalVelocity.Z).Unit
 			if slopeDir.Magnitude == 0 then slopeDir = -lastCFrame.LookVector end
 			horizontalVelocity += slopeDir * (gravityForce * math.sin(math.rad(slopeAngle)) * dt)
-			horizontalVelocity *= (1 - SLIDE_FRICTION * dt)
+			horizontalVelocity *= (1 - 0.1 * dt)
 		elseif moveMagnitude > 0.1 then
 			local worldMoveDir = lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
 			local targetVelocity = worldMoveDir * baseSpeed * moveMagnitude
@@ -110,28 +112,35 @@ local function updatePhysics(dt)
 			horizontalVelocity = horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
 		else
 			local lerpAlpha = 1 - math.exp(-deceleration * dt)
-			horizontalVelocity = horizontalVelocity:Lerp(Vector3.zero, lerpAlpha)
+			horizontalVelocity = horizontalVelocity:Lerp(VECTOR_ZERO, lerpAlpha)
 		end
 	else
 		currentVerticalVelocity = math.max(currentVerticalVelocity - gravityForce * dt, terminalVelocity)
 
 		if moveMagnitude > 0.1 then
 			local worldMoveDir = lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-			local targetVelocity = worldMoveDir * baseSpeed * AIR_CONTROL * -(currentVerticalVelocity / airResistance)
+			local airControlFactor = math.max(0, -currentVerticalVelocity / airResistance)
+			local targetVelocity = worldMoveDir * baseSpeed * AIR_CONTROL * airControlFactor
 			local lerpAlpha = 1 - math.exp(-acceleration * 0.3 * dt)
 			horizontalVelocity = horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
 		else
-			horizontalVelocity *= (1 - airResistance * 0.5 * dt)
+			horizontalVelocity *= (1 - 20 * dt)
 		end
 	end
 
-	currentVelocity = Vector3.new(horizontalVelocity.X, currentVerticalVelocity, horizontalVelocity.Z)
+	currentVelocity = Vector3.new(
+		math.clamp(horizontalVelocity.X, -horizontalTerminalVelocity, horizontalTerminalVelocity),
+		currentVerticalVelocity,
+		math.clamp(horizontalVelocity.Z, -horizontalTerminalVelocity, horizontalTerminalVelocity)
+	)
 
-	-- // Update UI
-	if VectorForces then
-		VectorForces.X.Text = "X: "..tostring(math.round(horizontalVelocity.X))
-		VectorForces.Y.Text = "Y: "..tostring(math.round(currentVerticalVelocity))
-		VectorForces.Z.Text = "Z: "..tostring(math.round(horizontalVelocity.Z))
+	local currentTime = tick()
+
+	if VectorForces and currentTime - lastUiUpdateTime >= uiUpdateInterval then
+		VectorForces.X.Text = "X: " .. tostring(math.round(horizontalVelocity.X))
+		VectorForces.Y.Text = "Y: " .. tostring(math.round(currentVerticalVelocity))
+		VectorForces.Z.Text = "Z: " .. tostring(math.round(horizontalVelocity.Z))
+		lastUiUpdateTime = currentTime
 	end
 
 	local camCFrame = cam.CFrame
@@ -139,30 +148,23 @@ local function updatePhysics(dt)
 	lastCFrame = lastCFrame:Lerp(CFrame.new(rigBody.Position, rigBody.Position + targetLook), 1 - math.exp(-turnSpeed * dt))
 end
 
--- // Network updates with throttling and delta compression for optomization
 local function sendNetworkUpdate()
 	local currentTime = tick()
-
-	-- // Check if its time to send an update
 	if currentTime - lastSentTime < sendInterval then
 		return
 	end
-	
-	moveRigEvent:FireServer(currentVelocity, lastCFrame) -- // currentVelocity: LinearVelocity. lastCFrame: AngularVelocity.
 
-	-- // Update the last sent values
+	moveRigEvent:FireServer(currentVelocity, lastCFrame)
 	lastSentVelocity = currentVelocity
 	lastSentCFrame = lastCFrame
 	lastSentTime = currentTime
 end
 
--- // Main update loop
 local function onRenderStepped(dt)
 	updatePhysics(dt)
 	sendNetworkUpdate()
 end
 
--- // Jump handling
 local function onJumpRequest()
 	if isGrounded and canJump and not isSliding then
 		currentVerticalVelocity = jumpPower
@@ -170,19 +172,14 @@ local function onJumpRequest()
 	end
 end
 
--- // Character reset
 local function onKeyPress(input, gameProcessed)
 	if not gameProcessed and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.R then
 		humanoid.Health = 0
 	end
 end
 
--- // Character added handling so we can just reset the real character to bring the fake rig back
 local function CharacterAdded(newChar)
-	-- // Clean up old connections
 	cleanupConnections()
-
-	-- // Set up new character
 	local newRig = workspace:WaitForChild("Rig_" .. player.Name)
 	rigHead = newRig:WaitForChild("Head")
 	rigBody = newRig:WaitForChild("Body")
@@ -190,21 +187,16 @@ local function CharacterAdded(newChar)
 	character = newChar
 	humanoid = newChar:WaitForChild("Humanoid")
 	humanoidRootPart = newChar:WaitForChild("HumanoidRootPart")
-
-	-- // Reset tracking variables
-	currentVelocity = Vector3.zero
+	currentVelocity = VECTOR_ZERO
 	currentVerticalVelocity = 0
 	lastCFrame = CFrame.new()
 	isGrounded = false
 	canJump = true
 	isSliding = false
 	lastSentTime = 0
-	lastSentVelocity = Vector3.zero
+	lastSentVelocity = VECTOR_ZERO
 	lastSentCFrame = CFrame.new()
-
 	raycastParams.FilterDescendantsInstances = {rigHead, rigBody, character}
-
-	-- // Set up new connections
 	table.insert(connections, RunService.RenderStepped:Connect(onRenderStepped))
 	table.insert(connections, UserInputService.JumpRequest:Connect(onJumpRequest))
 	table.insert(connections, UserInputService.InputBegan:Connect(onKeyPress))
@@ -212,16 +204,13 @@ end
 
 local function PlayerAdded(plr)
 	if plr ~= player then return end
-
 	plr.CharacterAdded:Connect(CharacterAdded)
-
 	local char = plr.Character
 	if char then
 		CharacterAdded(char)
 	end
 end
 
--- // Set up initial connections
 table.insert(connections, RunService.RenderStepped:Connect(onRenderStepped))
 table.insert(connections, UserInputService.JumpRequest:Connect(onJumpRequest))
 table.insert(connections, UserInputService.InputBegan:Connect(onKeyPress))

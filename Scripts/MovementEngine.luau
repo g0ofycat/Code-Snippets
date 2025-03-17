@@ -31,7 +31,6 @@ local SLIDE_THRESHOLD = 60  -- // Degrees; slope angle to trigger sliding
 
 -- // Network optimization
 local sendInterval = 1/30  -- // How fast the client updates the server, 30 FPS
-local movementThreshold = 0.01  -- // How much the player needs to go in order to trigger movement
 local lastSentTime = 0
 local lastSentVelocity = Vector3.zero
 local lastSentCFrame = CFrame.new()
@@ -56,7 +55,7 @@ raycastParams.FilterDescendantsInstances = {rigHead, rigBody, character}
 local connections = {}  -- // Store connections for cleanup
 
 local function checkGround()
-	-- // Raycasting every RenderStepped takes up alot of memory, so we can apply it at a fixed rate. (30 FPS)
+	-- // Raycasting every RenderStepped takes up alot of memory, so we can apply it at a fixed rate.
 	local currentTime = tick()
 	if currentTime - lastGroundCheckTime >= groundCheckInterval then
 		local raycastResult = workspace:Raycast(rigBody.Position, Vector3.new(0, -groundCheckDistance, 0), raycastParams)
@@ -82,12 +81,11 @@ local function cleanupConnections()
 	connections = {}
 end
 
--- // Main physics update function with all the improvements
+-- // Main physics update function (Gravity, Movement Controls, Sliding, Jumping, etc.)
 local function updatePhysics(dt)
 	local moveDir = humanoid.MoveDirection
 	local moveMagnitude = moveDir.Magnitude
 
-	-- // Normal detailed physics
 	local grounded, canStand, slopeAngle = checkGround()
 	local justLanded = grounded and not isGrounded
 	isGrounded = grounded
@@ -149,23 +147,6 @@ local function sendNetworkUpdate()
 	if currentTime - lastSentTime < sendInterval then
 		return
 	end
-
-	-- // Check if theres been a significant change in velocity or position
-	local velocityDelta = (currentVelocity - lastSentVelocity).Magnitude
-	local positionDelta = (lastCFrame.Position - lastSentCFrame.Position).Magnitude
-	local positionChanged = positionDelta > 0.01  -- // Small threshold to account for floating point precision
-	
-	--[[
-	if velocityDelta > movementThreshold or positionChanged then
-		-- // Send the update to the server, we have to do this since velocity changes cant be applied locally
-		moveRigEvent:FireServer(currentVelocity, lastCFrame) -- // currentVelocity: LinearVelocity. lastCFrame: AngularVelocity.
-
-		-- // Update the last sent values
-		lastSentVelocity = currentVelocity
-		lastSentCFrame = lastCFrame
-		lastSentTime = currentTime
-	end
-	--]]
 	
 	moveRigEvent:FireServer(currentVelocity, lastCFrame) -- // currentVelocity: LinearVelocity. lastCFrame: AngularVelocity.
 

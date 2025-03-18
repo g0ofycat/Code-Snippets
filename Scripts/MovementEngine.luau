@@ -230,6 +230,9 @@ local function CharacterAdded(newChar)
 	lastSentVelocity = VECTOR_ZERO
 	lastSentCFrame = CFrame.new()
 	raycastParams.FilterDescendantsInstances = {rigHead, rigBody, character}
+	
+	task.wait(0.1) -- // Apply the connections after a short delay since after you respawn there may be some forces that just fling you
+	
 	table.insert(connections, RunService.RenderStepped:Connect(onRenderStepped))
 	table.insert(connections, UserInputService.JumpRequest:Connect(onJumpRequest))
 	table.insert(connections, UserInputService.InputBegan:Connect(onKeyPress))

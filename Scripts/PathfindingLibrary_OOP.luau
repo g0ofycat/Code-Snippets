@@ -54,6 +54,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 end)
 --]]
 
+---------------------------------------------
+-- // Variables
+---------------------------------------------
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
 
@@ -62,6 +65,9 @@ PathfindingModule.__index = PathfindingModule
 
 -- // Create a new pathfinding system
 
+---------------------------------------------
+-- // Functionality
+---------------------------------------------
 function PathfindingModule.new()
 	local self = setmetatable({}, PathfindingModule)
 	self.currentAlgorithm = nil
@@ -118,9 +124,9 @@ end
 
 -- // Create a grid from the Roblox world for pathfinding. (Needed for all pathfinding Algorithms except Roblox)
 
---------------------
--- HELPER FUNCTIONS
---------------------
+---------------------------------------------
+-- // Helper Functions
+---------------------------------------------
 
 local function toHashVector3(vector)
 	return vector.X .. "," .. vector.Y .. "," .. vector.Z
@@ -130,17 +136,17 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 	resolution = resolution or self.resolution
 	local neighbors = {}
 
-	-- Base movement (4-directional for grid-based movement)
+	-- // Base movement (4-directional for grid-based movement)
 	local offsets = {
-		Vector3.new(resolution, 0, 0),   -- Right
-		Vector3.new(-resolution, 0, 0),  -- Left
-		Vector3.new(0, 0, resolution),   -- Forward
-		Vector3.new(0, 0, -resolution),  -- Backward
-		Vector3.new(0, resolution, 0),   -- Up
-		Vector3.new(0, -resolution, 0),  -- Down
+		Vector3.new(resolution, 0, 0),   -- // Right
+		Vector3.new(-resolution, 0, 0),  -- // Left
+		Vector3.new(0, 0, resolution),   -- // Forward
+		Vector3.new(0, 0, -resolution),  -- // Backward
+		Vector3.new(0, resolution, 0),   -- // Up
+		Vector3.new(0, -resolution, 0),  -- // Down
 	}
 
-	-- If NOT using the Grid algorithm, allow diagonal movement
+	-- // If NOT using the Grid algorithm, allow diagonal movement
 	if self.currentAlgorithm ~= "Grid" then
 		local diagonalOffsets = {
 			Vector3.new(resolution, 0, resolution),
@@ -153,25 +159,25 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 		end
 	end
 
-	-- Raycast parameters for collision detection
+	-- // Raycast parameters for collision detection
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 	raycastParams.FilterDescendantsInstances = {}
 	raycastParams.IgnoreWater = true
 
-	-- Process all valid neighbor positions
+	-- // Process all valid neighbor positions
 	for _, offset in ipairs(offsets) do
 		local neighborPos = position + offset
 		local neighborKey = toHashVector3(neighborPos)
 
-		-- Check if the position exists in the grid
+		-- // Check if the position exists in the grid
 		if grid[neighborKey] then
-			-- Perform a raycast to check for obstacles between current position and neighbor
+			-- // Cast a raycast to check for obstacles between current position and neighbor
 			local direction = neighborPos - position
 			local rayOrigin = position + Vector3.new(0, 1, 0) -- Slightly above ground to avoid floor collisions
 			local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
 
-			-- If no obstacle is hit (rayResult is nil), the neighbor is valid
+			-- // If no obstacle is hit (rayResult is nil), the neighbor is valid
 			if not rayResult then
 				table.insert(neighbors, grid[neighborKey])
 			end
@@ -180,8 +186,6 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 
 	return neighbors
 end
-
--- // All helping functions for A* Pathfinding
 
 local function heuristic(a, b)
 	return (b - a).Magnitude
@@ -258,9 +262,10 @@ local function newBinaryHeap()
 	return heap
 end
 
---------------------
--- ROBLOX PATHFINDER (Mainly use this as a last resort in the fallback table or you just want normal pathfinding) Time Complexity: ???
---------------------
+---------------------------------------------
+-- // Roblox Pathfinder (Mainly use this as a last resort in the fallback table or you just want normal pathfinding) Time Complexity: ???
+---------------------------------------------
+
 function PathfindingModule:RobloxPathfinding(start, goal)
 	local path = PathfindingService:CreatePath({
 		AgentRadius = 2,
@@ -281,9 +286,9 @@ function PathfindingModule:RobloxPathfinding(start, goal)
 	end
 end
 
---------------------
--- A* PATHFINDER (Best for finding Optimal Paths (More Cost Efficent), Not Recommened for 3D as it's commonly used in things like graphs and other 2D Spaces)
---------------------
+---------------------------------------------
+-- // A* Pathfinder (Best for finding Optimal Paths (More Cost Efficent), Not Recommened for 3D as it's commonly used in things like graphs and other 2D Spaces)
+---------------------------------------------
 function PathfindingModule:AStarPathfinding(start, goal, grid)
 	if not grid or not next(grid) then
 		if self.currentAlgorithm == "Grid" then
@@ -386,7 +391,6 @@ function PathfindingModule:AStarPathfinding(start, goal, grid)
 	return nil
 end
 
--- // Time Complexity: O(n)
 function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, heightCheck: boolean?, bufferDistance: number?)
 	heightCheck = heightCheck ~= false
 	bufferDistance = bufferDistance or 2
@@ -397,7 +401,7 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 	local minPos = center - halfSize
 	local maxPos = center + halfSize
 
-	-- // compute raycast parameters once
+	-- // Compute raycast parameters once so it doesnt call every loop
 	local raycastParams = RaycastParams.new()
 	raycastParams.IgnoreWater = true
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
@@ -458,16 +462,16 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 
 	print("Created world grid with " .. gridPoints .. " points")
 
-	if self.visualization.enabled then -- Optional chaining
+	if self.visualization.enabled then -- // Visualze if visualization is enabled
 		self:VisualizeGrid(grid)
 	end
 
 	return grid
 end
 
---------------------
--- DIJKSTRA PATHFINDER (Used for mainly finding the shortest path between 2 nodes, more costly) Time Complexity: O(V)
---------------------
+---------------------------------------------
+-- // Dijkstra Pathfinder (Used for mainly finding the shortest path between 2 nodes, more costly)
+---------------------------------------------
 function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 	if not grid or not next(grid) then
 		warn("Dijkstra pathfinding requires a valid grid")
@@ -575,9 +579,9 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 
 	return path
 end
---------------------
--- VISUALIZATION FUNCTIONS
---------------------
+---------------------------------------------
+-- // Visualization Functions
+---------------------------------------------
 
 -- // Enable or disable path visualization
 function PathfindingModule:SetVisualization(enabled: boolean, options: table)
@@ -754,6 +758,7 @@ function PathfindingModule:VisualizeGrid(grid, customOptions)
 end
 
 -- // Clear all visualizations
+
 function PathfindingModule:ClearVisualization()
 	local visualizationFolder = workspace:FindFirstChild("PathfindingVisualization")
 	if visualizationFolder then
@@ -786,9 +791,9 @@ function PathfindingModule:RemoveWaypointVisualizer(index)
 	end
 end
 
---------------------
--- FOLLOW PATH FUNCTION (Function to actually move the npc to the it)
---------------------
+---------------------------------------------
+-- // Follow Path Function (Function to actually move the npc to the it)
+---------------------------------------------
 
 function PathfindingModule:FollowPath(character, path)
 	if not path or #path == 0 then

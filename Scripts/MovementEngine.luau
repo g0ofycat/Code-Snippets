@@ -31,12 +31,11 @@ local terminalVelocity = -1000  -- // Maximum fall speed
 local horizontalTerminalVelocity = 1500 -- // Maximum horizontal speed
 local airResistance = 80  -- // Resistance when in air
 local jumpPower = 40  -- // Force of jump
-local AIR_CONTROL = 13  -- // Control factor while in air
-local SLIDE_FRICTION = 0.05 -- // Low friction for sliding
-local SLIDE_THRESHOLD = 45  -- // Degrees; slope angle to trigger sliding
+local AirControl = 13  -- // Control factor while in air
+local SlideThreshold = 45  -- // Degrees; slope angle to trigger sliding
 
 -- // Network optimization
-local sendInterval = 1/60  -- // How fast the client updates the server
+local sendInterval = 1/30  -- // How fast the client updates the server
 local lastSentTime = 0
 local lastSentVelocity = Vector3.zero
 local lastSentCFrame = CFrame.new()
@@ -76,7 +75,8 @@ local function checkGround() -- // Since you cant really apply gravity when ther
 		if raycastResult then
 			local normal = raycastResult.Normal
 			local slopeAngle = math.deg(math.acos(normal.Y)) -- // Since there is a sliding mechanic, we can see the angle of the slope at which we are on so we just dont slide on every surface
-			cachedGroundInfo = {true, slopeAngle <= SLIDE_THRESHOLD, slopeAngle} -- // Set isGrounded to true, set canStand if the slopeAngle were on is less than or equal to SLIDE_THRESHOLD and set the slopeAngle
+			cachedGroundInfo = {true, slopeAngle <= SlideThreshold, slopeAngle} -- // Set isGrounded to true, set canStand if the slopeAngle were on is less than or equal to SLIDE_THRESHOLD and set the slopeAngle
+			print(slopeAngle)
 		else
 			cachedGroundInfo = {false, false, 0} -- // If no Raycast Result
 		end
@@ -114,83 +114,123 @@ local function sendNetworkUpdate()
 end
 
 ---------------------------------------------
--- // Physics calculations
+-- // Physics Calculations
 ---------------------------------------------
 
-local function updatePhysics(dt)
-	local moveDir = humanoid.MoveDirection
-	local moveMagnitude = moveDir.Magnitude
-	local grounded, canStand, slopeAngle = checkGround() -- // Set variables from checkGround()
-	local justLanded = grounded and not isGrounded
-	isGrounded = grounded
-	isSliding = grounded and not canStand and slopeAngle > SLIDE_THRESHOLD
-	local horizontalVelocity = Vector3.new(currentVelocity.X, 0, currentVelocity.Z) -- // Currently (0, 0, 0)
-
-	if grounded then
-		if justLanded or currentVerticalVelocity < 0 then -- // So we cant just jump infinetly while mid air
-			currentVerticalVelocity = 0
-			canJump = true
-		end
-		
-		-- // Setting horizontalVelocity and lerping it so theres acceleration / deceleration only if we are grounded
-		
-		if isSliding then -- // Accelerate the horizontalVelocity while sliding
-			local slopeDir = Vector3.new(horizontalVelocity.X, 0, horizontalVelocity.Z).Unit
-			if slopeDir.Magnitude == 0 then slopeDir = -lastCFrame.LookVector end 
-			horizontalVelocity += slopeDir * (gravityForce * math.sin(math.rad(slopeAngle)) * dt)
-			horizontalVelocity *= (1 - 0.1 * dt)
-		elseif moveMagnitude > 0.1 then -- // Although the Rig and the actual character are 2 seperate things, you can still use Humanoid.MoveDirection.Magnitude even if the player cant move (eg. humanoid.WalkSpeed = 0)
-			local worldMoveDir = lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-			local targetVelocity = worldMoveDir * baseSpeed * moveMagnitude
-			local lerpAlpha = 1 - math.exp(-acceleration * dt)
-			horizontalVelocity = horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
-		else -- // If we are not moving, then decelerate
-			local lerpAlpha = 1 - math.exp(-deceleration * dt)
-			horizontalVelocity = horizontalVelocity:Lerp(VECTOR_ZERO, lerpAlpha)
-		end
-	else
-		
-		-- // We can adjust the vertical velocity if we are not grounded, allowing for gravity and also a termainal velocity so we accelerate downward when falling
-		
-		currentVerticalVelocity = math.max(currentVerticalVelocity - gravityForce * dt, terminalVelocity)
-		
-		-- // New equation for accelerating while midair 
-		
-		if moveMagnitude > 0.1 then
-			local worldMoveDir = lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
-			local airControlFactor = math.max(0, -currentVerticalVelocity / airResistance)
-			local targetVelocity = worldMoveDir * baseSpeed * AIR_CONTROL * airControlFactor
-			local lerpAlpha = 1 - math.exp(-acceleration * 0.3 * dt)
-			horizontalVelocity = horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
-		else -- // Triggers while we are not moving
-			horizontalVelocity *= (1 - 20 * dt)
-		end
+-- // Calculates slope-based sliding velocity
+local function calculateSlideVelocity(horizontalVelocity, slopeAngle, dt)
+	local slopeDir = Vector3.new(horizontalVelocity.X, 0, horizontalVelocity.Z).Unit
+	if slopeDir.Magnitude == 0 then 
+		slopeDir = -lastCFrame.LookVector 
 	end
 
-	-- // All of the calculations together, clamping the X and Z axis based on the horizontalTerminalVelocity.
-	currentVelocity = Vector3.new(
-		math.clamp(horizontalVelocity.X, -horizontalTerminalVelocity, horizontalTerminalVelocity), -- // X
-		currentVerticalVelocity, -- // Y
-		math.clamp(horizontalVelocity.Z, -horizontalTerminalVelocity, horizontalTerminalVelocity) -- // Z
-	)
-	
-	
-	-- // For UI Updates
-	
-	local currentTime = tick()
+	-- // Calculate acceleration due to slope using gravity and angle
+	-- // sin(slopeAngle) gives us the component of gravity along the slope
+	local slopeAcceleration = gravityForce * math.sin(math.rad(slopeAngle)) * dt
+	local slideVelocity = horizontalVelocity + slopeDir * slopeAcceleration
 
+	-- // Apply basic friction reduction
+	slideVelocity *= (1 - 0.1 * dt)
+	return slideVelocity
+end
+
+-- // Handles ground movement acceleration/deceleration
+local function calculateGroundMovement(moveDir, horizontalVelocity, dt)
+	local moveMagnitude = moveDir.Magnitude
+	if moveMagnitude > 0.1 then
+		-- // Convert world direction to local space and normalize
+		local worldMoveDir = lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
+		local targetVelocity = worldMoveDir * baseSpeed * moveMagnitude
+
+		-- // Exponential interpolation for smooth acceleration, this allows us to accelerate and decelerate
+		local lerpAlpha = 1 - math.exp(-acceleration * dt)
+		return horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
+	else
+		-- // Exponential deceleration when not moving
+		local lerpAlpha = 1 - math.exp(-deceleration * dt)
+		return horizontalVelocity:Lerp(VECTOR_ZERO, lerpAlpha)
+	end
+end
+
+-- // Handles air movement with control factor
+local function calculateAirMovement(moveDir, horizontalVelocity, dt)
+	local moveMagnitude = moveDir.Magnitude
+	if moveMagnitude > 0.1 then
+		local worldMoveDir = lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
+
+		-- // Calculate air control based on fall speed
+		-- // Faster falling = less control
+		local airControlFactor = math.max(0, -currentVerticalVelocity / airResistance)
+		local targetVelocity = worldMoveDir * baseSpeed * AirControl * airControlFactor
+
+		-- // Reduced acceleration in air (0.3x normal)
+		local lerpAlpha = 1 - math.exp(-acceleration * 0.3 * dt)
+		return horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
+	else
+		-- // Simple air resistance when not moving
+		return horizontalVelocity * (1 - 20 * dt)
+	end
+end
+
+-- // Updates UI with velocity information
+local function updateVelocityUI(horizontalVelocity)
+	local currentTime = tick()
 	if VectorForces and currentTime - lastUiUpdateTime >= uiUpdateInterval then
 		VectorForces.X.Text = "X: " .. tostring(math.round(horizontalVelocity.X))
 		VectorForces.Y.Text = "Y: " .. tostring(math.round(currentVerticalVelocity))
 		VectorForces.Z.Text = "Z: " .. tostring(math.round(horizontalVelocity.Z))
 		lastUiUpdateTime = currentTime
 	end
+end
 
-	-- // Since the rig and the actual character are 2 different things, you cant use things like the HRP's LookVector as the character needs to be able to move doing that. Instead, we can use the cameras LookVector which works anywhere. This allows for a shiftlock-like camera where the rig faces where you look
-	
+-- // Updates character rotation based on camera
+local function updateRotation(dt)
 	local camCFrame = cam.CFrame
 	local targetLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
-	lastCFrame = lastCFrame:Lerp(CFrame.new(rigBody.Position, rigBody.Position + targetLook), 1 - math.exp(-turnSpeed * dt))
+
+	-- // Smoothly interpolate rotation using exponential decay
+	local lerpAlpha = 1 - math.exp(-turnSpeed * dt)
+	lastCFrame = lastCFrame:Lerp(CFrame.new(rigBody.Position, rigBody.Position + targetLook), lerpAlpha)
+end
+
+---------------------------------------------
+-- // Main Physics Function
+---------------------------------------------
+
+local function updatePhysics(dt)
+	local moveDir = humanoid.MoveDirection
+	local grounded, canStand, slopeAngle = checkGround()
+	local justLanded = grounded and not isGrounded
+	isGrounded = grounded
+	isSliding = grounded and not canStand and slopeAngle > SlideThreshold
+	local horizontalVelocity = Vector3.new(currentVelocity.X, 0, currentVelocity.Z)
+
+	if grounded then
+		if justLanded or currentVerticalVelocity < 0 then
+			currentVerticalVelocity = 0
+			canJump = true
+		end
+
+		if isSliding then
+			horizontalVelocity = calculateSlideVelocity(horizontalVelocity, slopeAngle, dt)
+		else
+			horizontalVelocity = calculateGroundMovement(moveDir, horizontalVelocity, dt)
+		end
+	else
+		-- // Apply gravity with terminal velocity cap
+		currentVerticalVelocity = math.max(currentVerticalVelocity - gravityForce * dt, terminalVelocity)
+		horizontalVelocity = calculateAirMovement(moveDir, horizontalVelocity, dt)
+	end
+
+	-- // Combine horizontal and vertical velocities with clamping
+	currentVelocity = Vector3.new(
+		math.clamp(horizontalVelocity.X, -horizontalTerminalVelocity, horizontalTerminalVelocity),
+		currentVerticalVelocity,
+		math.clamp(horizontalVelocity.Z, -horizontalTerminalVelocity, horizontalTerminalVelocity)
+	)
+
+	updateVelocityUI(horizontalVelocity)
+	updateRotation(dt)
 end
 
 ---------------------------------------------

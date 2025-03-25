@@ -20,6 +20,7 @@ local rigHead = workspace:WaitForChild("Rig_" .. player.Name):WaitForChild("Head
 local rigBody = workspace:WaitForChild("Rig_" .. player.Name):WaitForChild("Body")
 local player_Gui = player:WaitForChild("PlayerGui")
 local vectorForces = player_Gui:WaitForChild("Keys"):WaitForChild("VectorForces")
+local BitBuffer = require(ReplicatedStorage.Modules.BitBuffer)
 
 -- // Movement Variables
 local MovementVariables = {
@@ -39,7 +40,7 @@ local MovementVariables = {
 
 -- // Network optimization
 local NetworkVariables = {
-    sendInterval = 1/30,       -- // How fast the client updates the server
+    sendInterval = 1/60,       -- // How fast the client updates the server
     lastSentTime = 0,
     lastSentVelocity = Vector3.zero,
     lastSentCFrame = CFrame.new()
@@ -112,17 +113,36 @@ local function cleanupConnections()
     connections = {}
 end
 
+---------------------------------------------
+-- // Bitpacking Methods
+---------------------------------------------
 
-local function sendNetworkUpdate()
-    local currentTime = tick()
-    if currentTime - NetworkVariables.lastSentTime < NetworkVariables.sendInterval then
-        return
-    end
+local function packData(velocity, cframe)
+	local buffer = BitBuffer.Create()
 
-    moveRigEvent:FireServer(MiscVariables.currentVelocity, MiscVariables.lastCFrame)
-    NetworkVariables.lastSentVelocity = MiscVariables.currentVelocity
-    NetworkVariables.lastSentCFrame = MiscVariables.lastCFrame
-    NetworkVariables.lastSentTime = currentTime
+	-- // Velocity (33 bits total: 11 + 11 + 11)
+	local vx = math.clamp(math.round(velocity.X + 1500), 0, 3000) -- // 11 bits (0-3000)
+	local vz = math.clamp(math.round(velocity.Z + 1500), 0, 3000) -- // 11 bits (0-3000)
+	local vy = math.clamp(math.round(velocity.Y + 1000), 0, 1080) -- // 11 bits (0-1080)
+	buffer:WriteUnsigned(11, vx)
+	buffer:WriteUnsigned(11, vz)
+	buffer:WriteUnsigned(11, vy)
+
+	-- // Position (39 bits total)
+	local pos = cframe.Position
+	local px = math.clamp(math.round((pos.X + 409.6) / 0.1), 0, 8191) -- // 13 bits (0-8191)
+	local py = math.clamp(math.round((pos.Y + 409.6) / 0.1), 0, 8191) -- // 13 bits (0-8191)
+	local pz = math.clamp(math.round((pos.Z + 409.6) / 0.1), 0, 8191) -- // 13 bits (0-8191)
+	buffer:WriteUnsigned(13, px)
+	buffer:WriteUnsigned(13, py)
+	buffer:WriteUnsigned(13, pz)
+
+	-- // Yaw (9 bits)
+	local _, yaw, _ = cframe:ToEulerAnglesYXZ()
+	local yawBits = math.clamp(math.round((yaw + math.pi) / (2 * math.pi) * 512), 0, 511) -- // 9 bits (0-511)
+	buffer:WriteUnsigned(9, yawBits)
+
+	return buffer:ToBase64()
 end
 
 ---------------------------------------------
@@ -178,10 +198,10 @@ local function updateVelocityUI(horizontalVelocity)
 end
 
 local function updateRotation(dt)
-    local camCFrame = cam.CFrame
-    local targetLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
-    local lerpAlpha = 1 - math.exp(-MovementVariables.turnSpeed * dt)
-    MiscVariables.lastCFrame = MiscVariables.lastCFrame:Lerp(CFrame.new(rigBody.Position, rigBody.Position + targetLook), lerpAlpha)
+	local camCFrame = cam.CFrame
+	local targetLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+	local lerpAlpha = MovementVariables.turnSpeed * dt * 2
+	MiscVariables.lastCFrame = MiscVariables.lastCFrame:Lerp(CFrame.new(rigBody.Position, rigBody.Position + targetLook), math.clamp(lerpAlpha, 0, 1))
 end
 
 ---------------------------------------------
@@ -220,6 +240,19 @@ local function updatePhysics(dt)
 
     updateVelocityUI(horizontalVelocity)
     updateRotation(dt)
+end
+
+local function sendNetworkUpdate()
+	local currentTime = tick()
+	if currentTime - NetworkVariables.lastSentTime < NetworkVariables.sendInterval then
+		return
+	end
+
+	local packedData = packData(MiscVariables.currentVelocity, MiscVariables.lastCFrame)
+	moveRigEvent:FireServer(packedData)
+	NetworkVariables.lastSentVelocity = MiscVariables.currentVelocity
+	NetworkVariables.lastSentCFrame = MiscVariables.lastCFrame
+	NetworkVariables.lastSentTime = currentTime
 end
 
 ---------------------------------------------

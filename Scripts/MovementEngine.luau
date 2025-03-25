@@ -48,7 +48,7 @@ local NetworkVariables = {
 
 -- // Performance measures
 local PerformanceVariables = {
-    groundCheckInterval = 1/30,  -- // How fast it raycasts to the ground for gravity
+    groundCheckInterval = 1/10,  -- // How fast it raycasts to the ground for gravity
     lastGroundCheckTime = 0,
     cachedGroundInfo = {false, false, 0}  -- // {isGrounded, canStand, slopeAngle}
 }
@@ -114,19 +114,19 @@ local function cleanupConnections()
 end
 
 ---------------------------------------------
--- // Bitpacking Methods
+-- // Bitpacking Methods (So we can reduce the amount of information sent to the server, around a ~75%(?) reduction of network bandwidth)
 ---------------------------------------------
 
 local function packData(velocity, cframe)
 	local buffer = BitBuffer.Create()
 
-	-- // Velocity (33 bits total: 11 + 11 + 11)
-	local vx = math.clamp(math.round(velocity.X + 1500), 0, 3000) -- // 11 bits (0-3000)
-	local vz = math.clamp(math.round(velocity.Z + 1500), 0, 3000) -- // 11 bits (0-3000)
-	local vy = math.clamp(math.round(velocity.Y + 1000), 0, 1080) -- // 11 bits (0-1080)
-	buffer:WriteUnsigned(11, vx)
-	buffer:WriteUnsigned(11, vz)
-	buffer:WriteUnsigned(11, vy)
+	-- // Velocity (38 bits total)
+	local vx = math.clamp(math.round(velocity.X + 3000), 0, 6000) -- // 13 bits (0-6000)
+	local vz = math.clamp(math.round(velocity.Z + 3000), 0, 6000) -- // 13 bits (0-6000)
+	local vy = math.clamp(math.round(velocity.Y + 2000), 0, 3000) -- // 12 bits (0-3000)
+	buffer:WriteUnsigned(13, vx)
+	buffer:WriteUnsigned(13, vz)
+	buffer:WriteUnsigned(12, vy)
 
 	-- // Position (39 bits total)
 	local pos = cframe.Position
@@ -289,8 +289,6 @@ local function CharacterAdded(newChar)
     NetworkVariables.lastSentVelocity = MiscVariables.VECTOR_ZERO
     NetworkVariables.lastSentCFrame = CFrame.new()
     MiscVariables.raycastParams.FilterDescendantsInstances = {rigHead, rigBody, character}
-    
-    task.wait(0.1) -- // Apply connections after a short delay to avoid flinging on respawn
     
     table.insert(connections, RunService.RenderStepped:Connect(onRenderStepped))
     table.insert(connections, UserInputService.JumpRequest:Connect(onJumpRequest))

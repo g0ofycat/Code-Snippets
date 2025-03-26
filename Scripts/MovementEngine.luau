@@ -35,8 +35,11 @@ local MovementVariables = {
     airResistance = 80,         -- // Resistance when in air
     jumpPower = 80,            -- // Force of jump
     AirControl = 13,           -- // Control factor while in air
-    SlideThreshold = 45        -- // Degrees; slope angle to trigger sliding
+	SlideThreshold = 45,        -- // Degrees; slope angle to trigger sliding
+	downVector = Vector3.new(0, -1, 0) -- // Just a cached down vector for optomization for gravity simulation. Don't change.
 }
+
+MovementVariables.groundCheckDirection = MovementVariables.downVector * MovementVariables.groundCheckDistance -- // We cant add this to the MovementVariables table since it wont be able to access the downVector while inside of it.
 
 -- // Network optimization
 local NetworkVariables = {
@@ -84,7 +87,11 @@ local UIUpdates = {
 local function checkGround()
     local currentTime = tick()
     if currentTime - PerformanceVariables.lastGroundCheckTime >= PerformanceVariables.groundCheckInterval then
-        local raycastResult = workspace:Raycast(rigBody.Position, Vector3.new(0, -MovementVariables.groundCheckDistance, 0), MiscVariables.raycastParams)
+		local raycastResult = workspace:Raycast(
+			rigBody.Position, 
+			MovementVariables.groundCheckDirection, 
+			MiscVariables.raycastParams
+		)
         if raycastResult then
             local normal = raycastResult.Normal
             local slopeAngle = math.deg(math.acos(normal.Y))
@@ -155,7 +162,8 @@ local function calculateSlideVelocity(horizontalVelocity, slopeAngle, dt)
         slopeDir = -MiscVariables.lastCFrame.LookVector 
     end
 
-    local slopeAcceleration = MovementVariables.gravityForce * math.sin(math.rad(slopeAngle)) * dt
+	local sinSlopeAngle = math.sin(math.rad(slopeAngle))
+	local slopeAcceleration = MovementVariables.gravityForce * sinSlopeAngle * dt
     local slideVelocity = horizontalVelocity + slopeDir * slopeAcceleration
     slideVelocity = slideVelocity * (1 - 0.1 * dt)
     return slideVelocity
@@ -296,24 +304,26 @@ local function CharacterAdded(newChar)
 end
 
 local function PlayerAdded(plr)
-    if plr ~= player then return end
-    plr.CharacterAdded:Connect(CharacterAdded)
-    local char = plr.Character
-    if char then
-        CharacterAdded(char)
-    end
+	if plr ~= player then return end
+
+	local charAddedConn = plr.CharacterAdded:Connect(CharacterAdded)
+	table.insert(connections, charAddedConn)
+
+	local char = plr.Character
+	if char then
+		CharacterAdded(char)
+	end
 end
 
--- // Insert all of the inputs and loops
+-- // Connect everything
 table.insert(connections, RunService.RenderStepped:Connect(onRenderStepped))
 table.insert(connections, UserInputService.JumpRequest:Connect(onJumpRequest))
 table.insert(connections, UserInputService.InputBegan:Connect(onKeyPress))
 table.insert(connections, player.CharacterAdded:Connect(CharacterAdded))
-
-Players.PlayerAdded:Connect(PlayerAdded)
-
-script.Destroying:Connect(cleanupConnections)
+table.insert(connections, Players.PlayerAdded:Connect(PlayerAdded))
 
 for _, plr in pairs(Players:GetPlayers()) do
-    PlayerAdded(plr)
+	PlayerAdded(plr)
 end
+
+script.Destroying:Connect(cleanupConnections)

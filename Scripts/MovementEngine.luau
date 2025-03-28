@@ -174,7 +174,7 @@ local function calculateGroundMovement(moveDir, horizontalVelocity, dt)
     if moveMagnitude > 0.1 then
         local worldMoveDir = MiscVariables.lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
         local targetVelocity = worldMoveDir * MovementVariables.baseSpeed * moveMagnitude
-        local lerpAlpha = 1 - math.exp(-MovementVariables.acceleration * dt)
+		local lerpAlpha = 1 - math.exp(-MovementVariables.acceleration * dt)
         return horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
     else
         local lerpAlpha = 1 - math.exp(-MovementVariables.deceleration * dt)
@@ -257,7 +257,11 @@ local function sendNetworkUpdate()
 	end
 
 	local packedData = packData(MiscVariables.currentVelocity, MiscVariables.lastCFrame)
-	moveRigEvent:FireServer(packedData)
+	
+	if MiscVariables.currentVelocity ~= NetworkVariables.lastSentVelocity and NetworkVariables.lastSentCFrame ~= MiscVariables.lastCFrame then -- // If we're not moving or rotating then we dont have to fire to the server
+		moveRigEvent:FireServer(packedData)
+	end
+	
 	NetworkVariables.lastSentVelocity = MiscVariables.currentVelocity
 	NetworkVariables.lastSentCFrame = MiscVariables.lastCFrame
 	NetworkVariables.lastSentTime = currentTime

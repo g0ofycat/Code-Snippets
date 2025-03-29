@@ -27,14 +27,15 @@ local PathfindingModule = {}
 PathfindingModule.__index = PathfindingModule
 
 ---------------------------------------------
--- // Functionality
+-- // Constructor
 ---------------------------------------------
 function PathfindingModule.new()
 	local self = setmetatable({}, PathfindingModule)
 	self.currentAlgorithm = nil
 	self.resolution = 1
 	self.hasJumped = false
-
+	self.bufferDistance = 2
+		
 	self.algorithms = {
 		Roblox = function(start, goal) 
 			self.currentAlgorithm = "Roblox"
@@ -55,6 +56,7 @@ function PathfindingModule.new()
 	}
 
 	-- // Visualization properties
+	
 	self.visualFolder = nil
 
 	self.visualization = { -- // Holder variables, wont actually be used for visualization
@@ -71,7 +73,7 @@ end
 
 -- // Find a path using the best available algorithm
 
-function PathfindingModule:FindBestPath(start: Vector3, goal: Vector3, grid: Table, algorithmNames: Table, visualize: boolean)
+function PathfindingModule:FindBestPath(start: Vector3, goal: Vector3, grid: table, algorithmNames: table, visualize: boolean)
 	for _, name in ipairs(algorithmNames) do
 		local path = self.algorithms[name] and self.algorithms[name](start, goal, grid)
 		if path then 
@@ -88,9 +90,17 @@ end
 ---------------------------------------------
 -- // Helper Functions
 ---------------------------------------------
-
-local function Vector3toString(vector)
+local function Vector3toString(vector): string
 	return vector.X .. "," .. vector.Y .. "," .. vector.Z
+end
+
+local function heuristic(a, b): number -- // Euclidean-distance Heuristic, maybe use Manhattan for Grid Pathfinding
+	return (b - a).Magnitude
+end
+
+local function stringToVector3(str): Vector3
+	local x, y, z = str:match("([^,]+),([^,]+),([^,]+)")
+	return Vector3.new(tonumber(x), tonumber(y), tonumber(z))
 end
 
 local raycastParams = RaycastParams.new()
@@ -100,7 +110,11 @@ raycastParams.IgnoreWater = true
 
 local offsets -- // Gets updated in the CreateWorldGrid() function, we don't want to keep initializing an already static table that only needs changing once
 
-function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resolution: number)
+---------------------------------------------
+-- // GetNeighbors Function, used to get the neighbors of a node which lays out obstacles and sees if you can go to certain nodes. Basically shows where the pathfinder needs to go.
+-- // Time Complexity: O(1). Edge Cases: O(k). 'k' being the number of neighbors. For large values of k this can be expensive, so we opt to only call this function when we need to.
+---------------------------------------------
+function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resolution: number): table
 	resolution = resolution or self.resolution
 	local neighbors = {}
 
@@ -169,20 +183,11 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 	return neighbors
 end
 
-local function heuristic(a, b) -- // Euclidean-distance Heuristic, maybe use Manhattan for Grid Pathfinding
-	return (b - a).Magnitude
-end
-
-local function stringToVector3(str)
-	local x, y, z = str:match("([^,]+),([^,]+),([^,]+)")
-	return Vector3.new(tonumber(x), tonumber(y), tonumber(z))
-end
-
-local function newBinaryHeap()
+local function newBinaryHeap(): table
 	local heap = {size = 0}
 	local data = {}
 
-	local function swap(i, j) -- // Swap the 2 arguments
+	local function swap(i, j) -- // Swap the 2 parameters
 		data[i], data[j] = data[j], data[i]
 	end
 
@@ -252,13 +257,13 @@ end
 
 ---------------------------------------------
 -- // Roblox Pathfinder (Mainly use this as a last resort in the fallback table or you just want normal pathfinding)
+-- // Time Complexity for PathfindingService is unknown
 ---------------------------------------------
-
 function PathfindingModule:RobloxPathfinding(start, goal) -- // I don't really think this needs documentation
 	local path = PathfindingService:CreatePath({
-		AgentRadius = 2,
+		AgentRadius = self.bufferDistance,
 		AgentHeight = 5,
-		WaypointSpacing = 2,
+		WaypointSpacing = self.resolution,
 		AgentCanJump = true
 	})
 
@@ -276,6 +281,7 @@ end
 
 ---------------------------------------------
 -- // A* Pathfinder (Best for finding Optimal Paths (More Costly), Not Recommened for 3D as it's commonly used in things like graphs and other 2D Spaces)
+-- // Time Complexity: O(b^d). b is the Branching Factor and d is the depth. With Binary Heap: O((E + V) log V)
 ---------------------------------------------
 function PathfindingModule:AStarPathfinding(start, goal, grid)
 	if not grid or not next(grid) then
@@ -395,10 +401,18 @@ function PathfindingModule:AStarPathfinding(start, goal, grid)
 	return nil
 end
 
-function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, heightCheck: boolean?, bufferDistance: number?) -- // We will be using Spatial Lookups to create the grid
+---------------------------------------------
+-- // World Grid Creation, it works by generating points based on directional vectors and then storing them into a table. It creates points in a box shaped region using the X and Z coordinates (spaced with the resolution parameter) in which is then organized into a 2D spacial grid.
+-- // Uses Raycasting to detect heights of obstacles and spaces nodes from it using the bufferDistance arugment. Center is the position of the region and the size is the size of the region.
+-- // Time Complexity (Spatial Lookups): O(1). Time Complexity is crucial since if this is slow then all of the other pathfinding algorithms are slower.
+-- // Time Complexity (Grid Generation): O(n).
+---------------------------------------------
+
+function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, heightCheck: boolean, bufferDistance: number): table -- // We will be using Spatial Lookups to create the grid
 	heightCheck = heightCheck ~= false
 	bufferDistance = bufferDistance or 2
-	self.resolution = resolution -- // Set the self resolution so we can use it even if there is no argument
+	self.bufferDistance = bufferDistance
+	self.resolution = resolution -- // Set the self resolution so we can use it even if there is no parameter
 
 	offsets = {
 		Vector3.new(resolution, 0, 0),   -- // Right
@@ -572,6 +586,7 @@ end
 
 ---------------------------------------------
 -- // Dijkstra Pathfinder (Used for mainly finding the shortest path between 2 nodes, more costly)
+-- // Time Complexity: O(V^2). V is the number of nodes
 ---------------------------------------------
 function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 	if not grid or not next(grid) then
@@ -690,11 +705,13 @@ function PathfindingModule:DijkstraPathfinding(start, goal, grid)
 
 	return path
 end
+
 ---------------------------------------------
 -- // Visualization Functions
 ---------------------------------------------
 
--- // Enable or disable path visualization and set the args
+-- // Enable or disable path visualization and set the parameters
+
 function PathfindingModule:SetVisualization(enabled: boolean, options: table)
 	self.visualization.enabled = enabled
 
@@ -815,7 +832,7 @@ function PathfindingModule:VisualizePath(path, customOptions)
 	return self
 end
 
--- // Visualize grid points for debugging
+-- // Visualize grid points for debugging. Time Complexity: O(n)
 
 function PathfindingModule:VisualizeGrid(grid, customOptions) -- // We will use batching to create a certain amount of parts per frame so we don't lag
 	if not self.visualization.enabled then
@@ -886,7 +903,7 @@ function PathfindingModule:VisualizeGrid(grid, customOptions) -- // We will use 
 			point.Color = options.pointColorGrid
 			point.Parent = self.gridVisualFolder
 
-			if pointsCreated % 200 == 0 then -- // 200 Points per Frame
+			if pointsCreated % 500 == 0 then -- // 500 Points per Frame
 				task.wait()
 			end
 		end
@@ -927,6 +944,7 @@ end
 
 ---------------------------------------------
 -- // Follow Path Function (Function to actually move the npc to the target)
+-- // Time Complexity: O(n)
 ---------------------------------------------
 
 function PathfindingModule:FollowPath(character, path)
@@ -1006,7 +1024,7 @@ function PathfindingModule:FollowPath(character, path)
 		self.currentWaypointIndex += 1
 	end
 
-	-- // Prevent the charcter from being stuck by jumping, you can also just stop following too
+	-- // Prevent the charcter from being stuck by jumping, you can also just stop following too. Made for a very specific edge case scenario where you close to a wall and try to go on top of it.
 	-- // It does this by tracking how long it took to go to each node using tick()
 
 	self.heartbeatConnection = RunService.Heartbeat:Connect(function()

@@ -1,66 +1,6 @@
---[[ Client Code Example:
--- // Do calculations on the server if you want to move npcs
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule"))
-
-local pathfinder = PathfindingModule.new()
-
-pathfinder:SetVisualization({ -- // Set to true to visualize grid, if youre making massive grids then don't set this to true
-	pointSize = 1, -- // Size of the Visual Part of the nodes
-	lineSize = 0.2, -- // Line Size of the Path Part
-	visualizeGrid = true, -- // Visualize the Grid
-	visualizeLine = true, -- // Visualize the Line
-	pointColor = Color3.fromRGB(102, 0, 255), -- // Color of the Visual Part
-	lineColor = Color3.fromRGB(136, 0, 255), -- // Color of the Grid Part
-	pointColorGrid = Color3.fromRGB(118, 118, 118) -- // Color of the Visual Part of Grid
-})
-
-local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-
-local grid = pathfinder:CreateWorldGrid(Vector3.new(0, 0, 0), Vector3.new(100, 100, 100), 2, true, 2) -- // Center: Center of the grid, Size: Size of the grid. Resoulution: Distance between each point (Recommended: 2 since it needs to detect collision). HeightCheck: Raycasts each point to each for the hit parts Y, more accurate collisions. BufferDistance: How far away each point is from the wall, this is to stop pathfinding sticking to the walls
--- // Roblox Pathfinding's AgentRadius is based on bufferDistance. If you want it to be different then change the PathfindingModule:RobloxPathfinding() function
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		local mouse = player:GetMouse()
-		local raycastResult = workspace:Raycast(mouse.UnitRay.Origin, mouse.UnitRay.Direction * 10000)
-
-		if raycastResult then
-			local startPosition = character.HumanoidRootPart.Position
-			local targetPosition = raycastResult.Position
-
-			-- // Find a path using the module
-			
-			local path, algorithm = pathfinder:FindBestPath(
-				character.PrimaryPart.Position, -- // Start position of the NPC (Vector3)
-				targetPosition, -- // End position of the NPC (Vector3)
-				grid, -- // Grid if you want to use the other pathfinding algorithms other than Roblox
-				{"AStar", "Roblox"} -- // Possible Names: Roblox (PathfindingService), AStar (A* Pathfinding Algorithm), Dijkstra (Dijkstra Pathfinding Algorithm), Grid (AStar without the diagonal vecotrs, moves in a grid-like pattern)
-				-- // The table above can store multiple pathfinding system as a fallback, if A* Fails then the normal Roblox one can be used. There can be as much as you want.
-			)
-
-			if path then
-				print("Found path using", algorithm, "with", #path, "waypoints")
-				
-				-- // Function to actually follow the path, uses your character as an example
-				
-				pathfinder:FollowPath(character, path)
-			else
-				print("No path found!")
-			end
-		end
-	end
-end)
---]]
-
 --[[	README:
 
-	- Includes Djraska , A*, Grid (A* but without diagonal vectors), and normal PathfindingService
+	- Includes Dijkstra, A*, Grid (A* but without diagonal vectors), and normal PathfindingService
 	- Grid Based with Spatial Lookups
 	- Visaulization Properties and more
 	- This was made for a project and not really meant to be used for general use, you can use it for whatever though!
@@ -97,8 +37,8 @@ function PathfindingModule.new()
 	self.hasJumped = false
 	self.bufferDistance = 2
 	self.visualizeLine = false
-	self.snapDistance = 5 -- // You might want to multiply it by the resolution for spaced grids
-	
+	self.snapDistance = 10 -- // You might want to multiply it by the resolution for spaced grids
+
 	self.algorithms = {
 		Roblox = function(start, goal) 
 			self.currentAlgorithm = "Roblox"
@@ -114,12 +54,12 @@ function PathfindingModule.new()
 		end,
 		Grid = function(start, goal, grid) 
 			self.currentAlgorithm = "Grid"
-			return self:AStarPathfinding(start, goal, grid)  -- // Just A* without the diagonal vectors
+			return self:DijkstraPathfinding(start, goal, grid)  -- // Just A* without the diagonal vectors
 		end
 	}
 
 	-- // Visualization properties
-	
+
 	self.visualFolder = nil
 
 	self.visualization = { -- // Holder variables, wont actually be used for visualization
@@ -166,9 +106,8 @@ local function stringToVector3(str: string): Vector3
 end
 
 local raycastParams = RaycastParams.new()
-raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-raycastParams.FilterDescendantsInstances = {}
 raycastParams.IgnoreWater = true
+raycastParams.FilterType = Enum.RaycastFilterType.Include
 
 ---------------------------------------------
 -- // GetNeighbors Function, used to get the neighbors of a node which lays out obstacles and sees if you can go to certain nodes. Basically shows where the pathfinder needs to go.
@@ -177,11 +116,11 @@ raycastParams.IgnoreWater = true
 function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resolution: number): table
 	resolution = resolution or self.resolution
 	local neighbors = {}
-	local offsets = {}
 
 	if not self.neighborOffsets or self.neighborOffsets.resolution ~= resolution or
 		(self.neighborOffsets.algorithm ~= self.currentAlgorithm) then
 
+	local offsets = {}
 		if self.currentAlgorithm == "Grid" then
 			-- // No diagonals
 			table.insert(offsets, Vector3.new(resolution, 0, 0))  -- // Right
@@ -199,8 +138,7 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 			table.insert(offsets, Vector3.new(-resolution, 0, resolution))
 			table.insert(offsets, Vector3.new(-resolution, 0, -resolution))
 		end
-		
-		print(offsets)
+	
 		self.neighborOffsets = {
 			offsets = offsets,
 			resolution = resolution,
@@ -228,7 +166,7 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 					end
 
 					local rayOrigin = position + Vector3.new(0, 1, 0)
-					local rayResult = workspace:Raycast(rayOrigin, direction, self.raycastParams)
+					local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
 
 					if not rayResult then
 						table.insert(neighbors, neighborPos)
@@ -244,7 +182,7 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 			if grid[neighborKey] then
 				local direction = offset
 				local rayOrigin = position + Vector3.new(0, 1, 0)
-				local rayResult = workspace:Raycast(rayOrigin, direction, self.raycastParams)
+				local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
 
 				if not rayResult then
 					table.insert(neighbors, grid[neighborKey])
@@ -481,11 +419,10 @@ end
 -- // Time Complexity (Grid Generation): O(n).
 ---------------------------------------------
 
-function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, heightCheck: boolean, bufferDistance: number): table -- // We will be using Spatial Lookups to create the grid
-	heightCheck = heightCheck ~= false
-	bufferDistance = bufferDistance or 2
+function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, bufferDistance: number): table -- // We will be using Spatial Lookups to create the grid
 	self.bufferDistance = bufferDistance
 	self.resolution = resolution -- // Set the self resolution so we can use it even if there is no parameter
+	local snapDist = self.snapDistance -- // Stored in a variable since I can't get self.snapDistance while inside of the grid.spatialLookup scope for some reason?
 
 	-- // Original flat grid structure (for backward compatibility)
 	local grid = {}
@@ -501,10 +438,7 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 	local minPos = center - halfSize
 	local maxPos = center + halfSize
 
-	local raycastParams = RaycastParams.new()
-	raycastParams.IgnoreWater = true
-	raycastParams.FilterType = Enum.RaycastFilterType.Include
-	local rayStartHeight = maxPos.Y + 50
+	local rayStartHeight = maxPos.Y + 100
 	local downVector = Vector3.new(0, -size.Y - 100, 0)
 	local upOffset = Vector3.new(0, 1, 0)
 	local gridPoints = 0
@@ -519,7 +453,8 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 	local partsInRegion = workspace:GetPartBoundsInBox(CFrame.new(center), size, overlapParams)
-	raycastParams.FilterDescendantsInstances = partsInRegion
+	
+	raycastParams.FilterDescendantsInstances = {partsInRegion}
 
 	-- // Batch process grid points 
 	for x = minPos.X, maxPos.X, resolution do
@@ -527,15 +462,10 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 		for z = minPos.Z, maxPos.Z, resolution do
 			local roundedZ = math.round(z / resolution) * resolution
 			local pos
-
-			if heightCheck then
-				local top = Vector3.new(roundedX, rayStartHeight, roundedZ)
-				local result = workspace:Raycast(top, downVector, raycastParams)
-				if not result then continue end
-				pos = Vector3.new(roundedX, result.Position.Y, roundedZ)
-			else
-				pos = Vector3.new(roundedX, minPos.Y, roundedZ)
-			end
+			local top = Vector3.new(roundedX, rayStartHeight, roundedZ)
+			local result = workspace:Raycast(top, downVector, raycastParams)
+			if not result then continue end
+			pos = Vector3.new(roundedX, result.Position.Y, roundedZ)
 
 			local rayOrigin = pos + upOffset
 			local isTooCloseToWall = false
@@ -557,12 +487,12 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 					spatialGrid[cellKey] = {}
 				end
 				spatialGrid[cellKey][posKey] = pos
-				gridPoints = gridPoints + (heightCheck and 1 or 0.5)
+				gridPoints = gridPoints + 1
 			end
 		end
 	end
 
-	-- // Attach spatial lookup methods to the original grid
+	-- // Attach spatial lookup methods to the original grid, what this does is that we can instead use this to snap the start and goal points, making it more effective. If it fails then we could just always use the old method for snapping
 	grid.spatialLookup = {
 		_spatialGrid = spatialGrid,
 		_cellSize = cellSize,
@@ -575,12 +505,13 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 			local closestDist = math.huge
 
 			-- // Search expanding cells until a point is found
-			for searchRadius = 0, 5 do -- // Limit search radius to prevent excessive searching (optomization)
+
+			for searchRadius = 0, snapDist do -- // Limit search radius so we dont have to search so much
 				local pointsFound = false
 
 				for xOffset = -searchRadius, searchRadius do
 					for zOffset = -searchRadius, searchRadius do
-						-- // Only check cells at the edge of our search radius (or center if radius=0)
+						-- // Only check cells at the edge of our search radius (or center if radius = 0)
 						if searchRadius == 0 or math.abs(xOffset) == searchRadius or math.abs(zOffset) == searchRadius then
 							local cellKey = (baseCellX + xOffset) .. "," .. (baseCellZ + zOffset)
 							local cell = self._spatialGrid[cellKey]
@@ -608,7 +539,7 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 			return nil
 		end,
 
-		GetPointsInRadius = function(self, position, radius)
+		GetPointsInRadius = function(self, position, radius) -- // Attached function of the spatial lookup. Returns a dictionary of the positions of the grid within a radius of the given position
 			local pointsInRadius = {}
 			local cellRadius = math.ceil(radius / self._cellSize)
 			local baseCellX = math.floor(position.X / self._cellSize)
@@ -632,7 +563,7 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 			return pointsInRadius
 		end,
 
-		IsValidPosition = function(self, position, threshold)
+		IsValidPosition = function(self, position, threshold) -- // Function to actually make sure that the position is actually valid and can be used for pathfinding
 			threshold = threshold or self._cellSize
 			local nearestPoint, distance = self:FindNearestPoint(position)
 			return nearestPoint ~= nil and distance <= threshold
@@ -786,12 +717,12 @@ function PathfindingModule:SetVisualization(options: table)
 			end
 		end
 	end
-	
+
 	if options.visualizeLine == true and not self.visualFolder then
 		self.visualizeLine = true
 		self:CreateVisualizationFolder()
 	end
-	
+
 	if not options.visualizeGrid and self.visualFolder then
 		self:ClearVisualization()
 	end
@@ -900,7 +831,7 @@ end
 -- // Visualize grid points for debugging. Time Complexity: O(n)
 
 function PathfindingModule:VisualizeGrid(grid: table, customOptions: table?) -- // We will use batching to create a certain amount of parts per frame so we don't lag
-	
+
 	if not self.visualization.enabled then
 		warn("Visualization is disabled - call :SetVisualization(true) first")
 		return
@@ -1093,7 +1024,7 @@ function PathfindingModule:FollowPath(character, path)
 		local timeElapsed = tick() - startPerNode
 		local maxTimeBetweenNodes = 0.5 * self.resolution
 		if timeElapsed >= maxTimeBetweenNodes then
-			if humanoid.MoveDirection.Magnitude < 0.1 and humanoid.FloorMaterial ~= Enum.Material.Air and self.hasJumped == false then
+			if humanoid.FloorMaterial ~= Enum.Material.Air and self.hasJumped == false then
 				print('Path obstructed. Now jumping.')
 				startPerNode = tick()
 				humanoid:ChangeState(Enum.HumanoidStateType.Jumping) -- // We can't use the  HumanoidJump() function as it is out of the scope

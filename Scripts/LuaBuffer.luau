@@ -85,9 +85,6 @@ function LuaBuffer:WriteBits(value: number, bitCount: number)
 end
 
 function LuaBuffer:ReadBit()
-	if self.bitPosition % 8 ~= 0 then
-		self:Flush()
-	end
 
 	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
 	if byteIndex > #self.buffer then

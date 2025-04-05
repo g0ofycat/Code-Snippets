@@ -1,3 +1,8 @@
+--[[ README:
+	A bit buffer module meant for optomizations. Just a personal project that was fun to create;
+	You might be better off using other Bit Buffer modules like BitBuf.
+--]]
+
 local LuaBuffer = {}
 LuaBuffer.__index = LuaBuffer
 
@@ -25,136 +30,108 @@ function LuaBuffer:WriteBit(bit: number)
 	if bit ~= 0 and bit ~= 1 then
 		error("Bit must be 0 or 1, got " .. tostring(bit))
 	end
-	local shiftAmount = self.bitPosition % 8
+	local shiftAmount = 7 - (self.bitPosition % 8)
 	local shiftedBit = bit32.lshift(bit, shiftAmount)
 	self.currentByte = bit32.bor(self.currentByte, shiftedBit)
 	self.bitPosition = self.bitPosition + 1
 	self.totalBitsWritten = self.totalBitsWritten + 1
-
-	-- // If 8 bits accumulated, store the byte
-	if self.bitPosition % 8 == 0 then
+	if self.bitPosition % 8 == 0 then -- // If 8 bits, store the byte
 		local buffer = self.buffer
-		local bytePos = math.floor(self.bitPosition / 8) -- // Align bytePos with completed bytes
-		local curByte = self.currentByte
-
+		local bytePos = math.floor(self.bitPosition / 8) 
 		if bytePos > #buffer then
-			table.insert(buffer, curByte) -- // Insert new byte
+			table.insert(buffer, self.currentByte)
 		else
-			buffer[bytePos] = curByte -- // Overwrite only if within bounds
+			buffer[bytePos] = self.currentByte
 		end
-
-		self.bytePosition = bytePos + 1 -- // Next available byte position
+		self.bytePosition = bytePos + 1
 		self.currentByte = 0
 	end
 end
 
 function LuaBuffer:WriteBits(value: number, bitCount: number)
-	if not (value >= 0 and bitCount > 0 and bitCount <= 52) then -- // Filter out negative numbers and numbers over 52. The reason for this is because of how Luau handles double-precision floating-point numbers it lose integer precision beyond 52-53 bits.
+	if not (value >= 0 and bitCount > 0 and bitCount <= 52) then -- // Filter out negative numbers and numbers over 52. The reason for this is because of how Luau handles double-precision floating-point numbers it lose integer precision beyond 52-53 bits
 		error("bitCount must be positive and not exceed 52")
 	end
-
 	local maxValue = 2^bitCount
 	if value >= maxValue then
 		error("Value out of range for " .. bitCount .. " bits. Use a higher bitCount.")
 	end
 
-	local remainingBits = bitCount
-	local buffer = self.buffer
+	-- // Handle full bytes directly when aligned
+	local bitsLeft = bitCount
+	while bitsLeft >= 8 and self.bitPosition % 8 == 0 do
+		local byteShift = bitsLeft - 8
+		local byte = bit32.band(bit32.rshift(value, byteShift), 0xFF)
 
-	-- // Handle pending bits in currentByte first
-	if self.bitPosition % 8 ~= 0 then
-		for i = bitCount - 1, 0, -1 do
-			local bit = bit32.band(bit32.rshift(value, i), 1)
-			self:WriteBit(bit)
-		end
-		return
-	end
-
-	-- // Read whole bytes when possible (Faster)
-	while remainingBits >= 8 do
-		local byte = bit32.band(bit32.rshift(value, remainingBits - 8), 0xFF)
-
-		if self.bytePosition > #buffer then
-			table.insert(buffer, byte)
+		-- // We can directly store byte to buffer to avoid bit-by-bit processing
+		local bytePos = math.floor(self.bitPosition / 8) + 1
+		if bytePos > #self.buffer then
+			table.insert(self.buffer, byte)
 		else
-			buffer[self.bytePosition] = byte
+			self.buffer[bytePos] = byte
 		end
 
-		self.bytePosition = self.bytePosition + 1
 		self.bitPosition = self.bitPosition + 8
 		self.totalBitsWritten = self.totalBitsWritten + 8
-		remainingBits = remainingBits - 8
+		self.bytePosition = bytePos + 1
+		bitsLeft = bitsLeft - 8
 	end
 
-	-- // Read remaining bits (If any)
-	if remainingBits > 0 then
-		local mask = bit32.lshift(1, remainingBits) - 1
-		local remainingValue = bit32.band(value, mask)
-
-		for i = remainingBits - 1, 0, -1 do
-			local bit = bit32.band(bit32.rshift(remainingValue, i), 1)
-			self:WriteBit(bit)
-		end
+	-- // Handle remaining bits
+	for i = bitsLeft - 1, 0, -1 do
+		local bit = bit32.band(bit32.rshift(value, i), 1)
+		self:WriteBit(bit)
 	end
 end
 
 function LuaBuffer:ReadBit()
-	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
+	if self.bitPosition % 8 ~= 0 then
+		self:Flush()
+	end
 
+	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
 	if byteIndex > #self.buffer then
 		error("Attempted to read beyond buffer length")
 	end
-	
 	if self.readBitPosition >= self.totalBitsWritten then
 		error("Attempted to read beyond written bits")
 	end
-
-	local byte = self.buffer[byteIndex]
-	local bitIndex = self.readBitPosition % 8
+	local byte = self.buffer[byteIndex] or 0
+	local bitIndex = 7 - (self.readBitPosition % 8)
 	local bit = bit32.band(bit32.rshift(byte, bitIndex), 1)
-
 	self.readBitPosition = self.readBitPosition + 1
 	return bit
 end
 
 function LuaBuffer:ReadBits(bitCount)
-	if not (bitCount > 0 and bitCount <= 52) then -- // Filter out negative numbers and numbers over 52. The reason for this is because of how Luau handles double-precision floating-point numbers it lose integer precision beyond 52-53 bits.
+	if not (bitCount > 0 and bitCount <= 52) then
 		error("bitCount must be between 1 and 52")
 	end
-	
-	self:Flush()
+
+	-- // Flush pending bits
+	if self.bitPosition % 8 ~= 0 then
+		self:Flush()
+	end
 
 	local availableBits = self.totalBitsWritten - self.readBitPosition
-
 	if bitCount > availableBits then
 		error(string.format("Requested %d bits, only %d available", bitCount, availableBits))
 	end
 
 	local value = 0
-	local remainingBits = bitCount
-	local buffer = self.buffer
+	local bitsLeft = bitCount
 
-	-- // Read whole bytes when possible (Faster)
-	while remainingBits >= 8 and (self.readBitPosition % 8) == 0 do
+	-- // Read full bytes at once when aligned
+	while bitsLeft >= 8 and self.readBitPosition % 8 == 0 do
 		local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
-		local byte = buffer[byteIndex]
-
-		value = bit32.bor(bit32.lshift(value, 8), byte)
-
+		value = bit32.lshift(value, 8) + self.buffer[byteIndex]
 		self.readBitPosition = self.readBitPosition + 8
-		remainingBits = remainingBits - 8
+		bitsLeft = bitsLeft - 8
 	end
 
-	-- // Read remaining bits (If any)
-	while remainingBits > 0 do
-		local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
-		local byte = buffer[byteIndex]
-		local bitPosInByte = self.readBitPosition % 8
-		local bit = bit32.band(bit32.rshift(byte, bitPosInByte), 1)
-
-		value = bit32.bor(bit32.lshift(value, 1), bit)
-		self.readBitPosition = self.readBitPosition + 1
-		remainingBits = remainingBits - 1
+	-- // Read remaining bits
+	for i = 1, bitsLeft do
+		value = bit32.lshift(value, 1) + self:ReadBit()
 	end
 
 	return value
@@ -164,33 +141,60 @@ end
 -- // Utility Methods
 ---------------------------------------------
 
-function LuaBuffer:Reset() -- // We need to actually reset the positions and the current byte were on since WriteBit() doesn't actually immediately store each byte in the self.buffer table, it only inserts it into the table when theres a full byte (8 bits).
+function LuaBuffer:Reset()
 	self.bitPosition = 0
 	self.bytePosition = 1
 	self.currentByte = 0
+	self.totalBitsWritten = 0
 	self.readBitPosition = 0
-end	
+	table.clear(self.buffer)
+end
 
 function LuaBuffer:Flush()
-	if self.bitPosition % 8 ~= 0 then -- // If bitPosition isn't a byte boundary
-		local validBits = self.bitPosition % 8
-		local mask = bit32.lshift(1, validBits) - 1 -- // Only valid bits (e.g., 3 bits -> 00000111)
-
-		self.currentByte = bit32.band(self.currentByte, mask) -- // Clear unwritten bits
-
-		local buffer = self.buffer
-		local bytePos = math.floor(self.bitPosition / 8) + 1 -- // Position for the partial byte
-		local curByte = self.currentByte
-
-		if bytePos > #buffer then
-			table.insert(buffer, curByte)
+	if self.bitPosition % 8 ~= 0 then -- // Store the partial byte in the buffer
+		local bytePos = math.floor(self.bitPosition / 8) + 1
+		if bytePos > #self.buffer then
+			table.insert(self.buffer, self.currentByte)
 		else
-			buffer[bytePos] = curByte
+			self.buffer[bytePos] = self.currentByte
 		end
-
 		self.bytePosition = bytePos + 1
 		self.currentByte = 0
 	end
+end
+
+function LuaBuffer:WriteByte(byte: number)
+	if byte < 0 or byte > 255 then
+		error("Byte must be between 0 and 255, got " .. tostring(byte))
+	end
+
+	-- // If we're byte-aligned, write directly
+	if self.bitPosition % 8 == 0 then
+		local bytePos = math.floor(self.bitPosition / 8) + 1
+		if bytePos > #self.buffer then
+			table.insert(self.buffer, byte)
+		else
+			self.buffer[bytePos] = byte
+		end
+		self.bitPosition = self.bitPosition + 8
+		self.totalBitsWritten = self.totalBitsWritten + 8
+		self.bytePosition = bytePos + 1
+	else -- // Else? Write it by each bit
+		for i = 7, 0, -1 do
+			self:WriteBit(bit32.band(bit32.rshift(byte, i), 1))
+		end
+	end
+end
+
+function LuaBuffer:GetBuffer()
+	self:Flush()
+	return self.buffer
+end
+
+function LuaBuffer:GetWrittenBytes()
+	self:Flush()
+	local byteCount = math.ceil(self.totalBitsWritten / 8)
+	return {table.unpack(self.buffer, 1, byteCount)}
 end
 
 ---------------------------------------------

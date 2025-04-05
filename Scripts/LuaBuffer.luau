@@ -40,7 +40,7 @@ function LuaBuffer:CheckSpace(neededCapacity: number) -- // Used to see if there
 	for i = 1, #self.buffer do
 		newBuffer[i] = self.buffer[i]
 	end
-	
+
 	self.buffer = newBuffer
 	self.bufferSize = newSize
 end
@@ -53,7 +53,7 @@ function LuaBuffer:WriteBit(bit: number)
 	if bit ~= 0 and bit ~= 1 then
 		error(string.format("Bit must be 0 or 1, got %d", bit))
 	end
-	local shiftAmount = 7 - (self.bitPosition % 8)
+	local shiftAmount = 7 - (self.bitPosition % 8) -- // For LSB to MSB do self.bitPosition % 8
 	local shiftedBit = bit32.lshift(bit, shiftAmount)
 	self.currentByte = bit32.bor(self.currentByte, shiftedBit)
 	self.bitPosition = self.bitPosition + 1
@@ -77,9 +77,9 @@ function LuaBuffer:WriteBits(value: number, bitCount: number)
 	end
 
 	-- // Handle full bytes directly when aligned
-	local bitsLeft = bitCount
-	while bitsLeft >= 8 and self.bitPosition % 8 == 0 do
-		local byteShift = bitsLeft - 8
+
+	while bitCount >= 8 and self.bitPosition % 8 == 0 do
+		local byteShift = bitCount - 8
 		local byte = bit32.band(bit32.rshift(value, byteShift), 0xFF)
 		-- // We can directly store byte to buffer to avoid bit-by-bit processing
 		local bytePos = math.floor(self.bitPosition / 8) + 1
@@ -88,33 +88,33 @@ function LuaBuffer:WriteBits(value: number, bitCount: number)
 		self.bitPosition = self.bitPosition + 8
 		self.totalBitsWritten = self.totalBitsWritten + 8
 		self.bytePosition = bytePos + 1
-		bitsLeft = bitsLeft - 8
+		bitCount -= 8
 	end
 
 	-- // Handle remaining bits
-	for i = bitsLeft - 1, 0, -1 do
+	for i = bitCount - 1, 0, -1 do
 		local bit = bit32.band(bit32.rshift(value, i), 1)
 		self:WriteBit(bit)
 	end
 end
 
 function LuaBuffer:ReadBit()
-    self:Flush()
-    local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
-    
-    if self.readBitPosition >= self.totalBitsWritten then
-        error("Attempted to read beyond written bits")
-    end
-    
-    if byteIndex > #self.buffer or self.buffer[byteIndex] == nil then
-        error("Attempted to read beyond buffer length or from nil byte at byteIndex " .. byteIndex)
-    end
+	self:Flush()
+	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
 
-    local byte = self.buffer[byteIndex]
-    local bitIndex = 7 - (self.readBitPosition % 8)
-    local bit = bit32.band(bit32.rshift(byte, bitIndex), 1)
-    self.readBitPosition = self.readBitPosition + 1
-    return bit
+	if self.readBitPosition >= self.totalBitsWritten then
+		error("Attempted to read beyond written bits")
+	end
+
+	if byteIndex > #self.buffer or self.buffer[byteIndex] == nil then
+		error("Attempted to read beyond buffer length or from nil byte at byteIndex " .. byteIndex)
+	end
+
+	local byte = self.buffer[byteIndex]
+	local bitIndex = 7 - (self.readBitPosition % 8)
+	local bit = bit32.band(bit32.rshift(byte, bitIndex), 1)
+	self.readBitPosition = self.readBitPosition + 1
+	return bit
 end
 
 function LuaBuffer:ReadBits(bitCount: number)

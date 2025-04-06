@@ -1,5 +1,6 @@
 --[[ README:
-	A bit buffer module meant for optomizations. Just a personal project that was fun to create;
+
+	A bit buffer module meant for data compression. Just a personal project that was fun to create;
 	You might be better off using other Bit Buffer modules like BitBuf.
 	
 	Notes:
@@ -10,6 +11,8 @@
 	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer
 	- You need to Flush() before reading. The reason for this is because if you did it automatically it may not be finished writing the data in the buffer
 	- If you do want to make Flushing automatic (not recommended), put self:Flush() on the first line of the ReadBit() and ReadBits() function
+	- Reads and Writes data sequentially
+	
 --]]
 
 local LuaBuffer = {}
@@ -95,7 +98,7 @@ function LuaBuffer:WriteBits(value: number, bitCount: number)
 	-- // Handle full bytes directly when aligned
 	while bitCount >= 8 and self.bitPosition % 8 == 0 do
 		local byteShift = bitCount - 8
-		local byte = bit32.band(bit32.rshift(value, byteShift), 0xFF)
+		local byte = bit32.band(bit32.rshift(value, byteShift), 255)
 		local bytePos = math.floor(self.bitPosition / 8) + 1
 		self:CheckSpace(bytePos)
 		self.buffer[bytePos] = byte
@@ -314,25 +317,26 @@ function LuaBuffer:WriteString(value: string, lengthBits: number?)
 	end
 end
 
--- WriteFloat() - Writes a 32-bit (single precision) floating point number (IEEE 754)
+-- WriteFloat() - Writes a 32-bit (single precision) floating point number. (Sign: 1 Bit, biasedExponent: 8 Bits, mantissaBits: 23)
 -- @param value (number): The float to write
 function LuaBuffer:WriteFloat(value: number)
+	
 	local sign = value < 0 and 1 or 0
 	value = math.abs(value)
-
+	
 	if value == 0 then -- // Zero
-		self:WriteBits(sign, 1)
+		self:WriteBit(sign, 1)
 		self:WriteBits(0, 8)
 		self:WriteBits(0, 23)
 		return
 	elseif value == math.huge then -- // Positive Infinity
-		self:WriteBits(sign, 1)
-		self:WriteBits(0xFF, 8)
+		self:WriteBit(sign, 1)
+		self:WriteBits(255, 8)
 		self:WriteBits(0, 23)
 		return
 	elseif value ~= value then -- // NaN
-		self:WriteBits(sign, 1)
-		self:WriteBits(0xFF, 8)
+		self:WriteBit(sign, 1)
+		self:WriteBits(255, 8)
 		self:WriteBits(1, 23)
 		return
 	end
@@ -343,20 +347,20 @@ function LuaBuffer:WriteFloat(value: number)
 	local biasedExponent = exponent + 127
 
 	if biasedExponent < 0 then
-		self:WriteBits(sign, 1)
+		self:WriteBit(sign, 1)
 		self:WriteBits(0, 8)
 		self:WriteBits(0, 23)
 		return
 	elseif biasedExponent > 254 then
-		self:WriteBits(sign, 1)
-		self:WriteBits(0xFF, 8)
+		self:WriteBit(sign, 1)
+		self:WriteBits(255, 8)
 		self:WriteBits(0, 23) 
 		return
 	end
+	
+	local mantissaBits = math.round(mantissa * (2^23))
 
-	local mantissaBits = math.floor(mantissa * (2^23) + 0.5)
-
-	self:WriteBits(sign, 1)
+	self:WriteBit(sign, 1)
 	self:WriteBits(biasedExponent, 8)
 	self:WriteBits(mantissaBits, 23)
 end
@@ -408,7 +412,7 @@ function LuaBuffer:ReadString(lengthBits: number?): string
 	return string.char(table.unpack(bytes))
 end
 
--- ReadFloat() - Reads a 32-bit (single precision) floating point number (IEEE 754)
+-- ReadFloat() - Reads a 32-bit (single precision) floating point number. (Sign: 1 Bit, biasedExponent: 8 Bits, mantissaBits: 23)
 -- @param value (number): The float to read
 function LuaBuffer:ReadFloat(): number
 	local sign = self:ReadBit()
@@ -421,7 +425,7 @@ function LuaBuffer:ReadFloat(): number
 		else
 			return (sign == 1 and -1 or 1) * (mantissa / (2^23)) * (2^(-126))
 		end
-	elseif exponent == 0xFF then
+	elseif exponent == 255 then
 		if mantissa == 0 then
 			return sign == 1 and -math.huge or math.huge
 		else
@@ -430,6 +434,7 @@ function LuaBuffer:ReadFloat(): number
 	end
 
 	local value = (1 + mantissa / (2^23)) * (2^(exponent - 127))
+	
 	return sign == 1 and -value or value
 end
 

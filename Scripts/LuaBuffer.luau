@@ -9,10 +9,27 @@
 	- Recommended bitCount <32. Maximum is 52 due to rounding errors in double-percision floating points in Luau
 	- Buffer growth is 1.5(bufferSize) to prevent rehashing buffer since rehashing alot causes performance issues
 	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer
-	- You need to Flush() before reading. The reason for this is because if you did it automatically it may not be finished writing the data in the buffer
-	- If you do want to make Flushing automatic (not recommended), put self:Flush() on the first line of the ReadBit() and ReadBits() function
 	- Reads and Writes data sequentially
 	
+	Example Usage:
+	
+local LuaBuffer = require(game.ReplicatedStorage.LuaBuffer)
+local buffer = LuaBuffer.New()
+
+buffer:WriteString("Hello World!", 16)
+buffer:WriteFloat(3.2416, 20)
+buffer:WriteUnsignedInteger(32002123, 32)
+
+local base64String = buffer:EncodeBase64()
+
+print("Base64 Encoded:", base64String)
+
+buffer:DecodeBase64(base64String)
+
+print(buffer:ReadString(16))
+print(buffer:ReadFloat(20))
+print(buffer:ReadUnsignedInteger(32))
+
 --]]
 
 local LuaBuffer = {}
@@ -118,6 +135,7 @@ end
 
 -- ReadBit() - Reads a singular bit
 function LuaBuffer:ReadBit()
+	self:Flush()
 	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
 
 	if self.readBitPosition >= self.totalBitsWritten then
@@ -137,6 +155,7 @@ end
 
 -- ReadBits(number) - Reads multiple bits
 function LuaBuffer:ReadBits(bitCount: number)
+	self:Flush()
 	if bitCount < 1 or bitCount > 52 then
 		error(string.format("bitCount must be 1-52 (received %d) due to Lua number precision limits", bitCount))
 	end
@@ -165,6 +184,21 @@ function LuaBuffer:ReadBits(bitCount: number)
 	end
 
 	return value
+end
+
+-- ReadByte() - Reads a full byte (8 bits) from the buffer
+-- @return (number): The byte value (0-255)
+function LuaBuffer:ReadByte()
+	if self.readBitPosition % 8 == 0 then
+		local bytePos = math.floor(self.readBitPosition / 8) + 1
+		if bytePos > #self.buffer then
+			error("Attempted to read beyond buffer length")
+		end
+		self.readBitPosition = self.readBitPosition + 8
+		return self.buffer[bytePos]
+	else
+		return self:ReadBits(8)
+	end
 end
 
 ---------------------------------------------
@@ -202,7 +236,7 @@ function LuaBuffer:Flush()
 		self:CheckSpace(bytePos)
 		self.buffer[bytePos] = self.currentByte
 		self.currentByte = 0
-		
+
 		-- // We need to add to totalBitsWritten since we're filling in a partial byte
 		local remainingBits = 8 - (self.bitPosition % 8)
 		self.totalBitsWritten = math.ceil(self.bitPosition / 8) * 8
@@ -254,6 +288,83 @@ end
 -- @return (number): The current byte position (derived from bitPosition)
 function LuaBuffer:GetBytePosition()
 	return math.floor(self.bitPosition / 8) + 1
+end
+
+---------------------------------------------
+-- // Base64 Methods
+---------------------------------------------
+
+local Base64Characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+-- EncodeBase64() - Turns the buffer table into a serialized string
+function LuaBuffer:EncodeBase64()
+	local byteTable = self:GetWrittenBytes()
+	local byteString = ""
+	for i = 1, #byteTable do
+		byteString = byteString .. string.char(byteTable[i])
+	end
+
+	local result = {}
+	local bytePos = 1
+	local len = #byteString
+
+	while bytePos <= len do
+		local b1 = byteString:byte(bytePos) or 0
+		local b2 = byteString:byte(bytePos + 1) or 0
+		local b3 = byteString:byte(bytePos + 2) or 0
+
+		local num = (b1 * 65536) + (b2 * 256) + b3
+		local c1 = bit32.rshift(num, 18) % 64
+		local c2 = bit32.rshift(num, 12) % 64
+		local c3 = bit32.rshift(num, 6) % 64
+		local c4 = num % 64
+
+		result[#result + 1] = Base64Characters:sub(c1 + 1, c1 + 1)
+		result[#result + 1] = Base64Characters:sub(c2 + 1, c2 + 1)
+		result[#result + 1] = Base64Characters:sub(c3 + 1, c3 + 1)
+		result[#result + 1] = Base64Characters:sub(c4 + 1, c4 + 1)
+
+		bytePos = bytePos + 3
+	end
+
+	local padding = len % 3
+	if padding == 1 then
+		result[#result - 1] = "="
+		result[#result] = "="
+	elseif padding == 2 then
+		result[#result] = "="
+	end
+
+	return table.concat(result)
+end
+
+-- DecodeBase64() - Decodes the base64String into a normal buffer
+-- @param base64String (string): The buffer in Base-64 string format
+function LuaBuffer:DecodeBase64(base64String: string)
+	local byteString = {}
+	local len = string.len(base64String)
+
+	for i = 1, len, 4 do
+		local c1 = Base64Characters:find(base64String:sub(i, i)) - 1
+		local c2 = Base64Characters:find(base64String:sub(i + 1, i + 1)) - 1
+		local c3 = base64String:sub(i + 2, i + 2) == "=" and 0 or (Base64Characters:find(base64String:sub(i + 2, i + 2)) - 1)
+		local c4 = base64String:sub(i + 3, i + 3) == "=" and 0 or (Base64Characters:find(base64String:sub(i + 3, i + 3)) - 1)
+
+		local num = (c1 * 262144) + (c2 * 4096) + (c3 * 64) + c4
+		byteString[#byteString + 1] = string.char(bit32.rshift(num, 16) % 256)
+		if i + 2 <= len and base64String:sub(i + 2, i + 2) ~= "=" then
+			byteString[#byteString + 1] = string.char(bit32.rshift(num, 8) % 256)
+		end
+		if i + 3 <= len and base64String:sub(i + 3, i + 3) ~= "=" then
+			byteString[#byteString + 1] = string.char(num % 256)
+		end
+	end
+
+	local decodedBytes = table.concat(byteString)
+	self:Reset()
+	for i = 1, #decodedBytes do
+		self:WriteByte(string.byte(decodedBytes, i))
+	end
 end
 
 ---------------------------------------------
@@ -320,49 +431,61 @@ end
 -- WriteFloat() - Writes a 32-bit (single precision) floating point number. (Sign: 1 Bit, biasedExponent: 8 Bits, mantissaBits: 23)
 -- @param value (number): The float to write
 function LuaBuffer:WriteFloat(value: number)
-	
 	local sign = value < 0 and 1 or 0
-	value = math.abs(value)
-	
-	if value == 0 then -- // Zero
-		self:WriteBit(sign, 1)
+	local abs_value = math.abs(value)
+	local smallest_normalized = math.pow(2, -126)
+
+	if abs_value == 0 then
+		self:WriteBit(sign)
 		self:WriteBits(0, 8)
 		self:WriteBits(0, 23)
 		return
-	elseif value == math.huge then -- // Positive Infinity
-		self:WriteBit(sign, 1)
+	elseif abs_value == math.huge then
+		self:WriteBit(sign)
 		self:WriteBits(255, 8)
 		self:WriteBits(0, 23)
 		return
-	elseif value ~= value then -- // NaN
-		self:WriteBit(sign, 1)
+	elseif value ~= value then
+		self:WriteBit(sign)
 		self:WriteBits(255, 8)
 		self:WriteBits(1, 23)
 		return
 	end
 
-	local exponent = math.floor(math.log(value, 2))
-	local mantissa = value / (2^exponent) - 1
+	if abs_value >= smallest_normalized then
+		local log_val = math.log(abs_value, 2)
+		local exponent = math.floor(log_val)
+		local fraction = (abs_value / math.pow(2, exponent)) - 1
+		local biased_exponent = exponent + 127
 
-	local biasedExponent = exponent + 127
+		if biased_exponent > 254 then
+			self:WriteBit(sign)
+			self:WriteBits(255, 8)
+			self:WriteBits(0, 23)
+			return
+		end
 
-	if biasedExponent < 0 then
-		self:WriteBit(sign, 1)
-		self:WriteBits(0, 8)
-		self:WriteBits(0, 23)
-		return
-	elseif biasedExponent > 254 then
-		self:WriteBit(sign, 1)
-		self:WriteBits(255, 8)
-		self:WriteBits(0, 23) 
-		return
+		local mantissa_bits = math.round(fraction * math.pow(2, 23))
+		self:WriteBit(sign)
+		self:WriteBits(biased_exponent, 8)
+		self:WriteBits(mantissa_bits, 23)
+	else
+		local fraction = abs_value / math.pow(2, -126)
+		local mantissa_bits = math.round(fraction * math.pow(2, 23))
+		if mantissa_bits >= math.pow(2, 23) then
+			local exponent = -126
+			local biased_exponent = exponent + 127
+			local fraction_part = (abs_value / math.pow(2, exponent)) - 1
+			local mantissa_bits_normal = math.round(fraction_part * math.pow(2, 23))
+			self:WriteBit(sign)
+			self:WriteBits(biased_exponent, 8)
+			self:WriteBits(mantissa_bits_normal, 23)
+		else
+			self:WriteBit(sign)
+			self:WriteBits(0, 8)
+			self:WriteBits(mantissa_bits, 23)
+		end
 	end
-	
-	local mantissaBits = math.round(mantissa * (2^23))
-
-	self:WriteBit(sign, 1)
-	self:WriteBits(biasedExponent, 8)
-	self:WriteBits(mantissaBits, 23)
 end
 
 -- ReadInteger() - Reads a signed integer with a specified bit count (defaults to 32-bit)
@@ -407,7 +530,7 @@ function LuaBuffer:ReadString(lengthBits: number?): string
 	local len = self:ReadBits(bits)
 	local bytes = {}
 	for i = 1, len do
-		bytes[i] = self:ReadBits(8)
+		bytes[i] = self:ReadByte()
 	end
 	return string.char(table.unpack(bytes))
 end
@@ -416,7 +539,7 @@ end
 -- @param value (number): The float to read
 function LuaBuffer:ReadFloat(): number
 	local sign = self:ReadBit()
-	local exponent = self:ReadBits(8)
+	local exponent = self:ReadByte()
 	local mantissa = self:ReadBits(23)
 
 	if exponent == 0 then
@@ -434,7 +557,7 @@ function LuaBuffer:ReadFloat(): number
 	end
 
 	local value = (1 + mantissa / (2^23)) * (2^(exponent - 127))
-	
+
 	return sign == 1 and -value or value
 end
 

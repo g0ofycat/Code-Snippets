@@ -8,7 +8,7 @@
 	- Bit counting is MSB to LSB
 	- Recommended bitCount <32. Maximum is 52 due to rounding errors in double-percision floating points in Luau
 	- Buffer growth is 1.5(bufferSize) to prevent rehashing buffer since rehashing alot causes performance issues
-	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer. (Optional optomization, you don't need to flush since it already writes only complete bytes into the buffer and does it automatically in the module)
+	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer. (Recommended to do before reading)
 	- Reads and Writes data sequentially
 	
 	Example Usage:
@@ -25,6 +25,8 @@ local base64String = buffer:EncodeBase64()
 print("Base64 Encoded:", base64String)
 
 buffer:DecodeBase64(base64String)
+
+buffer:Flush()
 
 print(buffer:ReadString(16))
 print(buffer:ReadFloat(20))
@@ -110,7 +112,7 @@ function LuaBuffer:WriteBits(value: number, bitCount: number)
 	if value > maxValue then
 		error(string.format("Value %d out of range for %d bits (max %d)", value, bitCount, maxValue))
 	end
-
+	
 	-- // Handle full bytes directly when aligned
 	while bitCount >= 8 and self.bitPosition % 8 == 0 do
 		local byteShift = bitCount - 8
@@ -134,7 +136,6 @@ end
 
 -- ReadBit() - Reads a singular bit
 function LuaBuffer:ReadBit()
-	self:Flush()
 	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
 
 	if self.readBitPosition >= self.totalBitsWritten then
@@ -154,7 +155,6 @@ end
 
 -- ReadBits(number) - Reads multiple bits
 function LuaBuffer:ReadBits(bitCount: number)
-	self:Flush()
 	if bitCount < 1 or bitCount > 52 then
 		error(string.format("bitCount must be 1-52 (received %d) due to Lua number precision limits", bitCount))
 	end
@@ -235,7 +235,7 @@ function LuaBuffer:Flush()
 		self:CheckSpace(bytePos)
 		self.buffer[bytePos] = self.currentByte
 		self.currentByte = 0
-
+		
 		-- // We need to add to totalBitsWritten since we're filling in a partial byte
 		local remainingBits = 8 - (self.bitPosition % 8)
 		self.totalBitsWritten = math.ceil(self.bitPosition / 8) * 8
@@ -334,6 +334,7 @@ end
 -- DecodeBase64() - Decodes the base64String into a normal buffer
 -- @param base64String (string): The buffer in Base-64 string format
 function LuaBuffer:DecodeBase64(base64String: string)
+	self:Reset()
 	local byteString = {}
 	local len = string.len(base64String)
 

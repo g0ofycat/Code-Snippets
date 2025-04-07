@@ -266,13 +266,7 @@ end
 -- GetWrittenBytes() - Returns a table containing the written bytes
 function LuaBuffer:GetWrittenBytes()
 	local byteCount = math.ceil(self.totalBitsWritten / 8)
-	local result = table.create(byteCount)
-
-	for i = 1, byteCount do
-		result[i] = self.buffer[i] or 0
-	end
-
-	return result
+	return table.move(self.buffer, 1, byteCount, 1, table.create(byteCount, 0))
 end
 
 -- GetBitPosition() - Returns the current bit position in the buffer

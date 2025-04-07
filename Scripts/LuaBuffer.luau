@@ -8,7 +8,7 @@
 	- Bit counting is MSB to LSB
 	- Recommended bitCount <32. Maximum is 52 due to rounding errors in double-percision floating points in Luau
 	- Buffer growth is 1.5(bufferSize) to prevent rehashing buffer since rehashing alot causes performance issues
-	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer
+	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer. (Optional optomization, you don't need to flush since it already writes only complete bytes into the buffer)
 	- Reads and Writes data sequentially
 	
 	Example Usage:
@@ -65,13 +65,12 @@ end
 function LuaBuffer:CheckSpace(neededCapacity: number) -- // Used to see if there's actually enough space in the buffer before writing. Creates a new table with more space and all of the contents of the old table
 	if neededCapacity <= self.bufferSize then return end -- // No need to compute anything if theres already space
 	-- // Geometric growth (1.5x) to balance memory usage and performance
-	local newSize = math.max(math.floor(self.bufferSize * 1.5), neededCapacity + 1)
+	local newSize = math.max(math.ceil(self.bufferSize * 1.5), neededCapacity)
 	local newBuffer = table.create(newSize)
 	-- // Copy existing data to newBuffer
-	for i = 1, #self.buffer do
-		newBuffer[i] = self.buffer[i]
-	end
-
+	
+	table.move(self.buffer, 1, #self.buffer, 1, newBuffer)
+	
 	self.buffer = newBuffer
 	self.bufferSize = newSize
 end
@@ -135,7 +134,6 @@ end
 
 -- ReadBit() - Reads a singular bit
 function LuaBuffer:ReadBit()
-	self:Flush()
 	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
 
 	if self.readBitPosition >= self.totalBitsWritten then
@@ -155,7 +153,6 @@ end
 
 -- ReadBits(number) - Reads multiple bits
 function LuaBuffer:ReadBits(bitCount: number)
-	self:Flush()
 	if bitCount < 1 or bitCount > 52 then
 		error(string.format("bitCount must be 1-52 (received %d) due to Lua number precision limits", bitCount))
 	end
@@ -229,7 +226,7 @@ function LuaBuffer:SeekReadPosition(bitPosition: number)
 	self.readBitPosition = bitPosition
 end
 
--- Flush() - Use before ReadBit(s). Appends incomplete bits by filling them with 0's until it makes a byte, then storing that byte
+-- Flush() - Appends incomplete bits by filling them with 0's until it makes a byte, then storing that byte
 function LuaBuffer:Flush()
 	if self.bitPosition % 8 ~= 0 then
 		local bytePos = math.floor(self.bitPosition / 8) + 1
@@ -464,7 +461,10 @@ function LuaBuffer:WriteFloat(value: number)
 			self:WriteBits(0, 23)
 			return
 		end
-
+		
+		-- // There's an edge case when writing the mantissa_bits where it can round to exactly 2^23
+		local log_val = math.log(abs_value, 2)
+		
 		local mantissa_bits = math.round(fraction * math.pow(2, 23))
 		self:WriteBit(sign)
 		self:WriteBits(biased_exponent, 8)

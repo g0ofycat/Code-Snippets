@@ -51,7 +51,7 @@ local NetworkVariables = {
 
 -- // Performance measures
 local PerformanceVariables = {
-    groundCheckInterval = 1/10,  -- // How fast it raycasts to the ground for gravity
+    groundCheckInterval = 1/30,  -- // How fast it raycasts to the ground for gravity
     lastGroundCheckTime = 0,
     cachedGroundInfo = {false, false, 0}  -- // {isGrounded, canStand, slopeAngle}
 }
@@ -124,34 +124,36 @@ end
 -- // Bitpacking Methods (So we can reduce the amount of information sent to the server, around a ~75%(?) reduction of network bandwidth)
 ---------------------------------------------
 
+local VELOCITY_OFFSET_X = 3000
+local VELOCITY_OFFSET_Y = 2000
+local VELOCITY_OFFSET_Z = 3000
+local POSITION_OFFSET = 409.6
+local POSITION_SCALE = 0.1
+local YAW_SCALE = 512 / (2 * math.pi)
+
+local POSITION_FACTOR = 1 / POSITION_SCALE
+
 local function packData(velocity, cframe)
 	local buffer = BitBuffer.Create()
 
-	-- // Velocity (38 bits total)
-	local vx = math.clamp(math.round(velocity.X + 3000), 0, 6000) -- // 13 bits (0-6000)
-	local vz = math.clamp(math.round(velocity.Z + 3000), 0, 6000) -- // 13 bits (0-6000)
-	local vy = math.clamp(math.round(velocity.Y + 2000), 0, 3000) -- // 12 bits (0-3000)
-	buffer:WriteUnsigned(13, vx)
-	buffer:WriteUnsigned(13, vz)
-	buffer:WriteUnsigned(12, vy)
+	-- // Velocity packing (38 bits)
+	buffer:WriteUnsigned(13, math.clamp(math.round(velocity.X + VELOCITY_OFFSET_X), 0, 6000))
+	buffer:WriteUnsigned(13, math.clamp(math.round(velocity.Z + VELOCITY_OFFSET_Z), 0, 6000))
+	buffer:WriteUnsigned(12, math.clamp(math.round(velocity.Y + VELOCITY_OFFSET_Y), 0, 3000))
 
-	-- // Position (39 bits total)
+	-- // Position packing (39 bits)
 	local pos = cframe.Position
-	local px = math.clamp(math.round((pos.X + 409.6) / 0.1), 0, 8191) -- // 13 bits (0-8191)
-	local py = math.clamp(math.round((pos.Y + 409.6) / 0.1), 0, 8191) -- // 13 bits (0-8191)
-	local pz = math.clamp(math.round((pos.Z + 409.6) / 0.1), 0, 8191) -- // 13 bits (0-8191)
-	buffer:WriteUnsigned(13, px)
-	buffer:WriteUnsigned(13, py)
-	buffer:WriteUnsigned(13, pz)
+	buffer:WriteUnsigned(13, math.clamp(math.round((pos.X + POSITION_OFFSET) * POSITION_FACTOR), 0, 8191))
+	buffer:WriteUnsigned(13, math.clamp(math.round((pos.Y + POSITION_OFFSET) * POSITION_FACTOR), 0, 8191))
+	buffer:WriteUnsigned(13, math.clamp(math.round((pos.Z + POSITION_OFFSET) * POSITION_FACTOR), 0, 8191))
 
-	-- // Yaw (9 bits)
-	local _, yaw, _ = cframe:ToEulerAnglesYXZ()
-	local yawBits = math.clamp(math.round((yaw + math.pi) / (2 * math.pi) * 512), 0, 511) -- // 9 bits (0-511)
-	buffer:WriteUnsigned(9, yawBits)
+	-- // Yaw packing (9 bits)
+	local cf = cframe
+	local yaw = math.atan2(-cf.RightVector.Z, cf.RightVector.X)
+	buffer:WriteUnsigned(9, math.clamp(math.round((yaw + math.pi) * YAW_SCALE), 0, 511))
 
 	return buffer:ToBase64()
 end
-
 ---------------------------------------------
 -- // Physics Calculations
 ---------------------------------------------
@@ -188,7 +190,7 @@ local function calculateAirMovement(moveDir, horizontalVelocity, dt)
         local worldMoveDir = MiscVariables.lastCFrame:VectorToObjectSpace(Vector3.new(moveDir.X, 0, moveDir.Z)).Unit
         local airControlFactor = math.max(0, -MiscVariables.currentVerticalVelocity / MovementVariables.airResistance)
         local targetVelocity = worldMoveDir * MovementVariables.baseSpeed * MovementVariables.AirControl * airControlFactor
-        local lerpAlpha = 1 - math.exp(-MovementVariables.acceleration * 0.3 * dt)
+        local lerpAlpha = 1 - math.exp(-MovementVariables.acceleration * 0.3 * dt) 
         return horizontalVelocity:Lerp(targetVelocity, lerpAlpha)
     else
         return horizontalVelocity * (1 - 20 * dt)
@@ -258,9 +260,7 @@ local function sendNetworkUpdate()
 
 	local packedData = packData(MiscVariables.currentVelocity, MiscVariables.lastCFrame)
 	
-	if MiscVariables.currentVelocity ~= NetworkVariables.lastSentVelocity and NetworkVariables.lastSentCFrame ~= MiscVariables.lastCFrame then -- // If we're not moving or rotating then we dont have to fire to the server
-		moveRigEvent:FireServer(packedData)
-	end
+	moveRigEvent:FireServer(packedData)
 	
 	NetworkVariables.lastSentVelocity = MiscVariables.currentVelocity
 	NetworkVariables.lastSentCFrame = MiscVariables.lastCFrame

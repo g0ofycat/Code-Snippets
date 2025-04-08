@@ -3,16 +3,7 @@
 	- Includes Dijkstra, A*, Grid (A* but without diagonal vectors), and normal PathfindingService
 	- Grid Based with Spatial Lookups
 	- Visaulization Properties and more
-	- This was made for a project and not really meant to be used for general use, you can use it for whatever though!
-	- You can add/remove/change the algorithms used for pathfinding
-	- You can add/remove/change the heuristics used for pathfinding
-	- You can change the default start and goal locations for the pathfinders
-	- You can change the default pathfinding settings
-	- You can change the resolution of the pathfinding grid
-	- You can change the pathfinding algorithm used
-	- You can change the pathfinding heuristics used
-	- You can change the start and goal offset for the pathfinding algorithm (useful if you want to pathfind to a specific part)
-	- You can disable/enable the cache
+	- This was made for a personal project and not really meant to be used for general use
 	- W.I.P
 	
 --]]
@@ -54,7 +45,7 @@ function PathfindingModule.new()
 		end,
 		Grid = function(start, goal, grid) 
 			self.currentAlgorithm = "Grid"
-			return self:DijkstraPathfinding(start, goal, grid)  -- // Just A* without the diagonal vectors
+			return self:AStarPathfinding(start, goal, grid)  -- // Just A* without the diagonal vectors
 		end
 	}
 
@@ -93,16 +84,18 @@ end
 -- // Helper Functions
 ---------------------------------------------
 local function Vector3toString(vector: Vector3): string
-	return string.format("%d,%d,%d", vector.X, vector.Y, vector.Z)
+	return tostring(vector.X) .. "," .. tostring(vector.Y) .. "," .. tostring(vector.Z)
 end
-
 local function heuristic(a: number, b: number): number -- // Euclidean-distance Heuristic, maybe use Manhattan for Grid Pathfinding
 	return (b - a).Magnitude
 end
 
-local function stringToVector3(str: string): Vector3
+local function stringToVector3(str: string): Vector3?
 	local x, y, z = str:match("([^,]+),([^,]+),([^,]+)")
-	return Vector3.new(tonumber(x), tonumber(y), tonumber(z))
+	if x and y and z then
+		return Vector3.new(tonumber(x), tonumber(y), tonumber(z))
+	end
+	return nil
 end
 
 local raycastParams = RaycastParams.new()
@@ -118,17 +111,15 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 	local neighbors = {}
 
 	if not self.neighborOffsets or self.neighborOffsets.resolution ~= resolution or
-		(self.neighborOffsets.algorithm ~= self.currentAlgorithm) then
-
-	local offsets = {}
+		self.neighborOffsets.algorithm ~= self.currentAlgorithm then
+		local offsets = {}
 		if self.currentAlgorithm == "Grid" then
-			-- // No diagonals
 			table.insert(offsets, Vector3.new(resolution, 0, 0))  -- // Right
 			table.insert(offsets, Vector3.new(-resolution, 0, 0)) -- // Left
 			table.insert(offsets, Vector3.new(0, 0, resolution))  -- // Forward
 			table.insert(offsets, Vector3.new(0, 0, -resolution)) -- // Backward
 		else
-			-- // Include diagonals for other algorithms
+			-- // Include diagonals
 			table.insert(offsets, Vector3.new(resolution, 0, 0))
 			table.insert(offsets, Vector3.new(-resolution, 0, 0))
 			table.insert(offsets, Vector3.new(0, 0, resolution))
@@ -138,7 +129,6 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 			table.insert(offsets, Vector3.new(-resolution, 0, resolution))
 			table.insert(offsets, Vector3.new(-resolution, 0, -resolution))
 		end
-	
 		self.neighborOffsets = {
 			offsets = offsets,
 			resolution = resolution,
@@ -147,45 +137,61 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 	end
 
 	local cachedOffsets = self.neighborOffsets.offsets
-	local posKey = Vector3toString(position)
+
+	local x_index = math.floor(position.X / resolution)
+	local z_index = math.floor(position.Z / resolution)
+
+	if not self.obstacleCache then
+		self.obstacleCache = {}
+	end
 
 	if grid.spatialLookup then
-		local searchRadius = resolution * 1.5 -- // Slightly larger to catch neighbors
-		local nearbyPoints = grid.spatialLookup:GetPointsInRadius(position, searchRadius)
+		for _, offset in ipairs(cachedOffsets) do
+			local neighborPos = position + offset
+			local neighborX = math.floor(neighborPos.X / resolution)
+			local neighborZ = math.floor(neighborPos.Z / resolution)
 
-		for neighborKey, neighborPos in pairs(nearbyPoints) do
-			if neighborKey ~= posKey then
-				local direction = neighborPos - position
-				local distance = direction.Magnitude
+			if grid.spatialLookup:ContainsPoint(neighborPos) then
+				local cacheKey = x_index .. "_" .. z_index .. "_" .. neighborX .. "_" .. neighborZ
+				local isBlocked
 
-				if distance <= resolution * 1.5 then
-					if self.currentAlgorithm == "Grid" then
-						local isCardinal = (direction.X == 0 or direction.Z == 0) and
-							(math.abs(direction.X) == resolution or math.abs(direction.Z) == resolution)
-						if not isCardinal then continue end
-					end
-
+				if self.obstacleCache[cacheKey] ~= nil then
+					isBlocked = self.obstacleCache[cacheKey]
+				else
 					local rayOrigin = position + Vector3.new(0, 1, 0)
-					local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
+					local rayResult = workspace:Raycast(rayOrigin, offset, raycastParams)
+					isBlocked = (rayResult ~= nil)
+					self.obstacleCache[cacheKey] = isBlocked
+				end
 
-					if not rayResult then
-						table.insert(neighbors, neighborPos)
-					end
+				if not isBlocked then
+					table.insert(neighbors, neighborPos)
 				end
 			end
 		end
 	else
+		if not grid[x_index] then return neighbors end
+
 		for _, offset in ipairs(cachedOffsets) do
-			local neighborPos = position + offset
-			local neighborKey = Vector3toString(neighborPos)
+			local neighborX = x_index + math.floor(offset.X / resolution)
+			local neighborZ = z_index + math.floor(offset.Z / resolution)
 
-			if grid[neighborKey] then
-				local direction = offset
-				local rayOrigin = position + Vector3.new(0, 1, 0)
-				local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
+			if grid[neighborX] and grid[neighborX][neighborZ] then
+				local neighborPos = Vector3.new(neighborX * resolution, position.Y, neighborZ * resolution)
+				local cacheKey = x_index .. "_" .. z_index .. "_" .. neighborX .. "_" .. neighborZ
+				local isBlocked
 
-				if not rayResult then
-					table.insert(neighbors, grid[neighborKey])
+				if self.obstacleCache[cacheKey] ~= nil then
+					isBlocked = self.obstacleCache[cacheKey]
+				else
+					local rayOrigin = position + Vector3.new(0, 1, 0)
+					local rayResult = workspace:Raycast(rayOrigin, offset, raycastParams)
+					isBlocked = (rayResult ~= nil)
+					self.obstacleCache[cacheKey] = isBlocked
+				end
+
+				if not isBlocked then
+					table.insert(neighbors, neighborPos)
 				end
 			end
 		end

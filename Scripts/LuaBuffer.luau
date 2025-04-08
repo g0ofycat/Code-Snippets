@@ -8,7 +8,7 @@
 	- Bit counting is MSB to LSB
 	- Recommended bitCount <32. Maximum is 52 due to rounding errors in double-percision floating points in Luau
 	- Buffer growth is 1.5(bufferSize) to prevent rehashing buffer since rehashing alot causes performance issues
-	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer. (Recommended to do before reading)
+	- Flushing fills in the incomplete bytes with 0's; It's then stored into the buffer.
 	- Reads and Writes data sequentially
 	
 	Example Usage:
@@ -25,8 +25,6 @@ local base64String = buffer:EncodeBase64()
 print("Base64 Encoded:", base64String)
 
 buffer:DecodeBase64(base64String)
-
-buffer:Flush()
 
 print(buffer:ReadString(16))
 print(buffer:ReadFloat(20))
@@ -136,6 +134,7 @@ end
 
 -- ReadBit() - Reads a singular bit
 function LuaBuffer:ReadBit()
+	self:Flush()
 	local byteIndex = bit32.rshift(self.readBitPosition, 3) + 1
 
 	if self.readBitPosition >= self.totalBitsWritten then
@@ -155,6 +154,10 @@ end
 
 -- ReadBits(number) - Reads multiple bits
 function LuaBuffer:ReadBits(bitCount: number)
+	self:Flush()
+	if self.bitPosition % 8 ~= 0 then
+		error("Buffer has partial bytes; call Flush() before reading")
+	end
 	if bitCount < 1 or bitCount > 52 then
 		error(string.format("bitCount must be 1-52 (received %d) due to Lua number precision limits", bitCount))
 	end

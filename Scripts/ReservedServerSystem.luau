@@ -16,7 +16,9 @@
 
 --]]
 
+---------------------------------------------
 -- // Variables
+---------------------------------------------
 
 local serversFolder = game.ReplicatedStorage:WaitForChild("Servers")
 local Messenger = require(game.ReplicatedStorage.Modules:WaitForChild("Messenger"))
@@ -41,6 +43,8 @@ local serverEntries = {} -- // All Servers inside of a table
 
 local serverDataCache = {} -- // Table to Optomize the amount of MemoryStoreService calls, Used to quickly acess data instead of just constantly calling MemoryStoreService for the data
 
+local debounce = {}
+
 local Config = {
 	PLAYER_UPDATE_INTERVAL = math.max(5, math.floor(#Players:GetPlayers() / 10)), -- // (In Seconds) How fast the servers will update (Only for player count since its the only one that really changes, may need to dynamically scale it based on the PlayerCount, another option is to only call it when the PlayerCount Changes)
 	Expiration = 86400, -- // The expiration of the hashmap in seconds (1 Day)
@@ -51,6 +55,11 @@ local Config = {
 
 local lastUpdate = time()
 local pendingUpdate = false
+
+
+---------------------------------------------
+-- // Functionality
+---------------------------------------------
 
 -- // Teleport Function
 
@@ -97,6 +106,16 @@ end
 -- // Server creation event, handles the text filtering, creating string values, hashmap creation
 
 CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
+	if debounce[player.UserId] then
+		warn("Player is on cooldown:", player.UserId)
+		return
+	end
+
+	debounce[player.UserId] = true
+	task.delay(5, function()
+		debounce[player.UserId] = nil
+	end)
+
 	local success, code = pcall(TeleportService.ReserveServer, TeleportService, PlaceId)
 
 	if not success then
@@ -127,7 +146,6 @@ CreateServer.OnServerEvent:Connect(function(player, Desc, Name, VCMode)
 	end
 
 	-- // Attempt to update player count safely
-	
 	local function updatePlayerCount()
 		local updateSuccess, err = pcall(function()
 			Hashmap:UpdateAsync(code, function(serverData)

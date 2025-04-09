@@ -1,11 +1,72 @@
 --[[	README:
-
+	
+	- Turn StreamingEnabled off, the CreateWorldGrid relies on Raycasting which may not work if the grid and you are far away. This can lead to obstacles just not be rendered and raycasting passing through it
 	- Includes Dijkstra, A*, Grid (A* but without diagonal vectors), and normal PathfindingService
 	- Grid Based with Spatial Lookups
 	- Visaulization Properties and more
 	- This was made for a project and not really meant to be used for general use.
 	- W.I.P
 	
+	Example Code:
+	
+-- // Do calculations on the server if you want to move npcs
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local PathfindingModule = require(ReplicatedStorage:WaitForChild("PathfindingModule"))
+
+local pathfinder = PathfindingModule.new()
+
+pathfinder:SetVisualization({ -- // Set to true to visualize grid, if youre making massive grids then don't set this to true
+	pointSize = 1, -- // Size of the Visual Part of the nodes
+	lineSize = 0.2, -- // Line Size of the Path Part
+	visualizeGrid = true, -- // Visualize the Grid
+	visualizeLine = true, -- // Visualize the Line
+	pointColor = Color3.fromRGB(102, 0, 255), -- // Color of the Visual Part
+	lineColor = Color3.fromRGB(136, 0, 255), -- // Color of the Grid Part
+	pointColorGrid = Color3.fromRGB(255, 255, 255) -- // Color of the Visual Part of Grid
+})
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+
+local grid = pathfinder:CreateWorldGrid(Vector3.new(0, 0, 0), Vector3.new(200, 100, 200), 2, 2) -- // Center: Center of the grid, Size: Size of the grid. Resoulution: Distance between each point (Recommended: 2 since it needs to detect collision). BufferDistance: How far away each point is from the wall, this is to stop pathfinding sticking to the walls
+-- // Roblox Pathfinding's AgentRadius is based on bufferDistance. If you want it to be different then change the PathfindingModule:RobloxPathfinding() function
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local mouse = player:GetMouse()
+		local raycastResult = workspace:Raycast(mouse.UnitRay.Origin, mouse.UnitRay.Direction * 10000)
+
+		if raycastResult then
+			local startPosition = character.HumanoidRootPart.Position
+			local targetPosition = raycastResult.Position
+
+			-- // Find a path using the module
+			
+			local path, algorithm = pathfinder:FindBestPath(
+				character.PrimaryPart.Position, -- // Start position of the NPC (Vector3)
+				targetPosition, -- // End position of the NPC (Vector3)
+				grid, -- // Grid if you want to use the other pathfinding algorithms other than Roblox
+				{"Grid", "Roblox"} -- // Possible Names: Roblox (PathfindingService), AStar (A* Pathfinding Algorithm), Dijkstra (Dijkstra Pathfinding Algorithm), Grid (AStar without the diagonal vecotrs, moves in a grid-like pattern)
+				-- // The table above can store multiple pathfinding system as a fallback, if A* Fails then the normal Roblox one can be used. There can be as much as you want.
+			)
+
+			if path then
+				print("Found path using", algorithm, "with", #path, "waypoints")
+				
+				-- // Function to actually follow the path, uses your character as an example
+				
+				pathfinder:FollowPath(character, path)
+			else
+				print("No path found!")
+			end
+		end
+	end
+end)
+
 --]]
 
 ---------------------------------------------

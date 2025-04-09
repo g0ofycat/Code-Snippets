@@ -3,7 +3,7 @@
 	- Includes Dijkstra, A*, Grid (A* but without diagonal vectors), and normal PathfindingService
 	- Grid Based with Spatial Lookups
 	- Visaulization Properties and more
-	- This was made for a personal project and not really meant to be used for general use
+	- This was made for a project and not really meant to be used for general use.
 	- W.I.P
 	
 --]]
@@ -28,7 +28,7 @@ function PathfindingModule.new()
 	self.hasJumped = false
 	self.bufferDistance = 2
 	self.visualizeLine = false
-	self.snapDistance = 10 -- // You might want to multiply it by the resolution for spaced grids
+	self.snapDistance = 5 -- // You might want to multiply it by the resolution for spaced grids
 
 	self.algorithms = {
 		Roblox = function(start, goal) 
@@ -86,6 +86,7 @@ end
 local function Vector3toString(vector: Vector3): string
 	return tostring(vector.X) .. "," .. tostring(vector.Y) .. "," .. tostring(vector.Z)
 end
+
 local function heuristic(a: number, b: number): number -- // Euclidean-distance Heuristic, maybe use Manhattan for Grid Pathfinding
 	return (b - a).Magnitude
 end
@@ -100,7 +101,7 @@ end
 
 local raycastParams = RaycastParams.new()
 raycastParams.IgnoreWater = true
-raycastParams.FilterType = Enum.RaycastFilterType.Include
+raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
 ---------------------------------------------
 -- // GetNeighbors Function, used to get the neighbors of a node which lays out obstacles and sees if you can go to certain nodes. Basically shows where the pathfinder needs to go.
@@ -111,15 +112,17 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 	local neighbors = {}
 
 	if not self.neighborOffsets or self.neighborOffsets.resolution ~= resolution or
-		self.neighborOffsets.algorithm ~= self.currentAlgorithm then
+		(self.neighborOffsets.algorithm ~= self.currentAlgorithm) then
+
 		local offsets = {}
 		if self.currentAlgorithm == "Grid" then
+			-- // No diagonals
 			table.insert(offsets, Vector3.new(resolution, 0, 0))  -- // Right
 			table.insert(offsets, Vector3.new(-resolution, 0, 0)) -- // Left
 			table.insert(offsets, Vector3.new(0, 0, resolution))  -- // Forward
 			table.insert(offsets, Vector3.new(0, 0, -resolution)) -- // Backward
 		else
-			-- // Include diagonals
+			-- // Include diagonals for other algorithms
 			table.insert(offsets, Vector3.new(resolution, 0, 0))
 			table.insert(offsets, Vector3.new(-resolution, 0, 0))
 			table.insert(offsets, Vector3.new(0, 0, resolution))
@@ -129,6 +132,7 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 			table.insert(offsets, Vector3.new(-resolution, 0, resolution))
 			table.insert(offsets, Vector3.new(-resolution, 0, -resolution))
 		end
+
 		self.neighborOffsets = {
 			offsets = offsets,
 			resolution = resolution,
@@ -137,61 +141,45 @@ function PathfindingModule:GetNeighbors(position: Vector3, grid: table, resoluti
 	end
 
 	local cachedOffsets = self.neighborOffsets.offsets
-
-	local x_index = math.floor(position.X / resolution)
-	local z_index = math.floor(position.Z / resolution)
-
-	if not self.obstacleCache then
-		self.obstacleCache = {}
-	end
+	local posKey = Vector3toString(position)
 
 	if grid.spatialLookup then
-		for _, offset in ipairs(cachedOffsets) do
-			local neighborPos = position + offset
-			local neighborX = math.floor(neighborPos.X / resolution)
-			local neighborZ = math.floor(neighborPos.Z / resolution)
+		local searchRadius = resolution * 1.5 -- // Slightly larger to catch neighbors
+		local nearbyPoints = grid.spatialLookup:GetPointsInRadius(position, searchRadius)
 
-			if grid.spatialLookup:ContainsPoint(neighborPos) then
-				local cacheKey = x_index .. "_" .. z_index .. "_" .. neighborX .. "_" .. neighborZ
-				local isBlocked
+		for neighborKey, neighborPos in pairs(nearbyPoints) do
+			if neighborKey ~= posKey then
+				local direction = neighborPos - position
+				local distance = direction.Magnitude
 
-				if self.obstacleCache[cacheKey] ~= nil then
-					isBlocked = self.obstacleCache[cacheKey]
-				else
+				if distance <= resolution * 1.5 then
+					if self.currentAlgorithm == "Grid" then
+						local isCardinal = (direction.X == 0 or direction.Z == 0) and
+							(math.abs(direction.X) == resolution or math.abs(direction.Z) == resolution)
+						if not isCardinal then continue end
+					end
+
 					local rayOrigin = position + Vector3.new(0, 1, 0)
-					local rayResult = workspace:Raycast(rayOrigin, offset, raycastParams)
-					isBlocked = (rayResult ~= nil)
-					self.obstacleCache[cacheKey] = isBlocked
-				end
+					local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
 
-				if not isBlocked then
-					table.insert(neighbors, neighborPos)
+					if not rayResult then
+						table.insert(neighbors, neighborPos)
+					end
 				end
 			end
 		end
 	else
-		if not grid[x_index] then return neighbors end
-
 		for _, offset in ipairs(cachedOffsets) do
-			local neighborX = x_index + math.floor(offset.X / resolution)
-			local neighborZ = z_index + math.floor(offset.Z / resolution)
+			local neighborPos = position + offset
+			local neighborKey = Vector3toString(neighborPos)
 
-			if grid[neighborX] and grid[neighborX][neighborZ] then
-				local neighborPos = Vector3.new(neighborX * resolution, position.Y, neighborZ * resolution)
-				local cacheKey = x_index .. "_" .. z_index .. "_" .. neighborX .. "_" .. neighborZ
-				local isBlocked
+			if grid[neighborKey] then
+				local direction = offset
+				local rayOrigin = position + Vector3.new(0, 1, 0)
+				local rayResult = workspace:Raycast(rayOrigin, direction, raycastParams)
 
-				if self.obstacleCache[cacheKey] ~= nil then
-					isBlocked = self.obstacleCache[cacheKey]
-				else
-					local rayOrigin = position + Vector3.new(0, 1, 0)
-					local rayResult = workspace:Raycast(rayOrigin, offset, raycastParams)
-					isBlocked = (rayResult ~= nil)
-					self.obstacleCache[cacheKey] = isBlocked
-				end
-
-				if not isBlocked then
-					table.insert(neighbors, neighborPos)
+				if not rayResult then
+					table.insert(neighbors, grid[neighborKey])
 				end
 			end
 		end
@@ -425,17 +413,18 @@ end
 -- // Time Complexity (Grid Generation): O(n).
 ---------------------------------------------
 
-function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, bufferDistance: number): table -- // We will be using Spatial Lookups to create the grid
+function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resolution: number, bufferDistance: number): table
+	if size.Y == 0 then
+		warn("size.Y is small (" .. size.Y .. "); consider increasing for uneven terrain")
+	end
 	self.bufferDistance = bufferDistance
-	self.resolution = resolution -- // Set the self resolution so we can use it even if there is no parameter
-	local snapDist = self.snapDistance -- // Stored in a variable since I can't get self.snapDistance while inside of the grid.spatialLookup scope for some reason?
+	self.resolution = resolution
+	local snapDist = self.snapDistance
 
-	-- // Original flat grid structure (for backward compatibility)
 	local grid = {}
 
-	-- // Spatial grid structure for better lookups
 	local spatialGrid = {}
-	local cellSize = resolution * 2 -- // Cell size for spatial partitioning
+	local cellSize = resolution * 2
 	local function getCellKey(x, z)
 		return math.floor(x / cellSize) .. "," .. math.floor(z / cellSize)
 	end
@@ -454,13 +443,15 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 		Vector3.new(-bufferDistance, 0, 0),
 		Vector3.new(0, 0, bufferDistance),
 		Vector3.new(0, 0, -bufferDistance),
+		Vector3.new(bufferDistance / math.sqrt(2), 0, bufferDistance / math.sqrt(2)),
+		Vector3.new(-bufferDistance / math.sqrt(2), 0, bufferDistance / math.sqrt(2)),
+		Vector3.new(bufferDistance / math.sqrt(2), 0, -bufferDistance / math.sqrt(2)),
+		Vector3.new(-bufferDistance / math.sqrt(2), 0, -bufferDistance / math.sqrt(2))
 	}
 
-	local overlapParams = OverlapParams.new()
-	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
-	local partsInRegion = workspace:GetPartBoundsInBox(CFrame.new(center), size, overlapParams)
-	
-	raycastParams.FilterDescendantsInstances = {partsInRegion}
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = {}
 
 	-- // Batch process grid points 
 	for x = minPos.X, maxPos.X, resolution do
@@ -498,26 +489,22 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 		end
 	end
 
-	-- // Attach spatial lookup methods to the original grid, what this does is that we can instead use this to snap the start and goal points, making it more effective. If it fails then we could just always use the old method for snapping
+	-- // Attach spatial lookup methods
 	grid.spatialLookup = {
 		_spatialGrid = spatialGrid,
 		_cellSize = cellSize,
 
-		-- // Find nearest point to a given position
 		FindNearestPoint = function(self, position)
 			local baseCellX = math.floor(position.X / self._cellSize)
 			local baseCellZ = math.floor(position.Z / self._cellSize)
 			local closestPoint = nil
 			local closestDist = math.huge
 
-			-- // Search expanding cells until a point is found
-
-			for searchRadius = 0, snapDist do -- // Limit search radius so we dont have to search so much
+			for searchRadius = 0, snapDist do
 				local pointsFound = false
 
 				for xOffset = -searchRadius, searchRadius do
 					for zOffset = -searchRadius, searchRadius do
-						-- // Only check cells at the edge of our search radius (or center if radius = 0)
 						if searchRadius == 0 or math.abs(xOffset) == searchRadius or math.abs(zOffset) == searchRadius then
 							local cellKey = (baseCellX + xOffset) .. "," .. (baseCellZ + zOffset)
 							local cell = self._spatialGrid[cellKey]
@@ -536,7 +523,6 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 					end
 				end
 
-				-- // If we found points in this radius and have a closest one, return it
 				if pointsFound and closestPoint then
 					return closestPoint, closestDist
 				end
@@ -545,7 +531,7 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 			return nil
 		end,
 
-		GetPointsInRadius = function(self, position, radius) -- // Attached function of the spatial lookup. Returns a dictionary of the positions of the grid within a radius of the given position
+		GetPointsInRadius = function(self, position, radius)
 			local pointsInRadius = {}
 			local cellRadius = math.ceil(radius / self._cellSize)
 			local baseCellX = math.floor(position.X / self._cellSize)
@@ -569,7 +555,7 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 			return pointsInRadius
 		end,
 
-		IsValidPosition = function(self, position, threshold) -- // Function to actually make sure that the position is actually valid and can be used for pathfinding
+		IsValidPosition = function(self, position, threshold)
 			threshold = threshold or self._cellSize
 			local nearestPoint, distance = self:FindNearestPoint(position)
 			return nearestPoint ~= nil and distance <= threshold
@@ -584,6 +570,7 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 
 	return grid
 end
+
 
 ---------------------------------------------
 -- // Dijkstra Pathfinder (Used for mainly finding the shortest path between 2 nodes, more costly)

@@ -24,7 +24,9 @@ local base64String = buffer:EncodeBase64()
 
 print("Base64 Encoded:", base64String)
 
-buffer:DecodeBase64(base64String)
+local base64StringDecode = buffer:DecodeBase64(base64String)
+
+print("Base64 Decoded:", base64StringDecode)
 
 print(buffer:ReadString(16))
 print(buffer:ReadFloat(20))
@@ -68,9 +70,9 @@ function LuaBuffer:CheckSpace(neededCapacity: number) -- // Used to see if there
 	local newSize = math.max(math.ceil(self.bufferSize * 1.5), neededCapacity)
 	local newBuffer = table.create(newSize)
 	-- // Copy existing data to newBuffer
-	
+
 	table.move(self.buffer, 1, #self.buffer, 1, newBuffer)
-	
+
 	self.buffer = newBuffer
 	self.bufferSize = newSize
 end
@@ -110,7 +112,7 @@ function LuaBuffer:WriteBits(value: number, bitCount: number)
 	if value > maxValue then
 		error(string.format("Value %d out of range for %d bits (max %d)", value, bitCount, maxValue))
 	end
-	
+
 	-- // Handle full bytes directly when aligned
 	while bitCount >= 8 and self.bitPosition % 8 == 0 do
 		local byteShift = bitCount - 8
@@ -238,7 +240,7 @@ function LuaBuffer:Flush()
 		self:CheckSpace(bytePos)
 		self.buffer[bytePos] = self.currentByte
 		self.currentByte = 0
-		
+
 		-- // We need to add to totalBitsWritten since we're filling in a partial byte
 		local remainingBits = 8 - (self.bitPosition % 8)
 		self.totalBitsWritten = math.ceil(self.bitPosition / 8) * 8
@@ -292,7 +294,7 @@ end
 
 local Base64Characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
--- EncodeBase64() - Turns the buffer table into a serialized string
+-- EncodeBase64() - Returns the buffer table in a serialized Base-64 string (Doesn't actually set the self.buffer, so you don't need to decode it to read)
 function LuaBuffer:EncodeBase64()
 	local byteTable = self:GetWrittenBytes()
 	local byteString = ""
@@ -334,7 +336,7 @@ function LuaBuffer:EncodeBase64()
 	return table.concat(result)
 end
 
--- DecodeBase64() - Decodes the base64String into a normal buffer
+-- DecodeBase64() - Decodes the Base-64 String into a normal buffer and writes it in the buffer, then returning the buffer. (Resets all data in buffer before writing)
 -- @param base64String (string): The buffer in Base-64 string format
 function LuaBuffer:DecodeBase64(base64String: string)
 	self:Reset()
@@ -362,6 +364,7 @@ function LuaBuffer:DecodeBase64(base64String: string)
 	for i = 1, #decodedBytes do
 		self:WriteByte(string.byte(decodedBytes, i))
 	end
+	return self.buffer
 end
 
 ---------------------------------------------
@@ -461,10 +464,10 @@ function LuaBuffer:WriteFloat(value: number)
 			self:WriteBits(0, 23)
 			return
 		end
-		
+
 		-- // There's an edge case when writing the mantissa_bits where it can round to exactly 2^23
 		local log_val = math.log(abs_value, 2)
-		
+
 		local mantissa_bits = math.round(fraction * math.pow(2, 23))
 		self:WriteBit(sign)
 		self:WriteBits(biased_exponent, 8)

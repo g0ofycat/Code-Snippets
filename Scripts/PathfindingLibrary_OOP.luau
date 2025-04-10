@@ -503,16 +503,11 @@ function PathfindingModule:CreateWorldGrid(center: Vector3, size: Vector3, resol
 		Vector3.new(bufferDistance, 0, 0),
 		Vector3.new(-bufferDistance, 0, 0),
 		Vector3.new(0, 0, bufferDistance),
-		Vector3.new(0, 0, -bufferDistance),
-		Vector3.new(bufferDistance / math.sqrt(2), 0, bufferDistance / math.sqrt(2)),
-		Vector3.new(-bufferDistance / math.sqrt(2), 0, bufferDistance / math.sqrt(2)),
-		Vector3.new(bufferDistance / math.sqrt(2), 0, -bufferDistance / math.sqrt(2)),
-		Vector3.new(-bufferDistance / math.sqrt(2), 0, -bufferDistance / math.sqrt(2))
+		Vector3.new(0, 0, -bufferDistance)
 	}
 
 	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = {}
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude -- // Might want to exclude characters, although errors on server script that require this module
 
 	-- // Batch process grid points 
 	for x = minPos.X, maxPos.X, resolution do
@@ -635,7 +630,7 @@ end
 
 ---------------------------------------------
 -- // Dijkstra Pathfinder (Used for mainly finding the shortest path between 2 nodes, more costly)
--- // Time Complexity: O(V^2). V is the number of nodes
+-- // Time Complexity: O((E + V) log V). V is the number of nodes, E is connections	/ edges
 ---------------------------------------------
 function PathfindingModule:DijkstraPathfinding(start: Vector3, goal: Vector3, grid: table)
 	if not grid or not next(grid) then
@@ -883,22 +878,21 @@ function PathfindingModule:VisualizePath(path: table, customOptions: table?)
 end
 
 -- // Visualize grid points for debugging. Time Complexity: O(n)
-
 function PathfindingModule:VisualizeGrid(grid: table, customOptions: table?) -- // We will use batching to create a certain amount of parts per frame so we don't lag
 
 	if not self.visualization.enabled then
-		warn("Visualization is disabled - call :SetVisualization(true) first")
+		warn("Visualization is disabled - call :SetVisualization({visualizeGrid = true}) first")
 		return
 	end
 
-	if not grid or not next(grid) then 
+	if not grid or not next(grid) then
 		warn("Grid is nil or empty - check your grid creation")
-		return 
+		return
 	end
 
 	local options = {
 		pointSize = (self.visualization.pointSize or 0.5) * 0.5,
-		pointColorGrid = self.visualization.pointColorGrid, 
+		pointColorGrid = self.visualization.pointColorGrid,
 		transparency = 0.7
 	}
 
@@ -908,54 +902,63 @@ function PathfindingModule:VisualizeGrid(grid: table, customOptions: table?) -- 
 		end
 	end
 
+	-- // Clean up previous grid visualization if it exists
 	if self.gridVisualFolder then
+		if self.gridVisualizationRoutine then
+			task.cancel(self.gridVisualizationRoutine)
+			self.gridVisualizationRoutine = nil
+		end
 		self.gridVisualFolder:Destroy()
 	end
 
 	self.gridVisualFolder = Instance.new("Folder")
 	self.gridVisualFolder.Name = "GridVisualization"
-	self.gridVisualFolder.Parent = workspace 
+	self.gridVisualFolder.Parent = workspace
 
-	local totalPoints = 0
-	for _ in pairs(grid) do totalPoints += 1 end
-	print("Attempting to visualize", totalPoints, "grid points")
+	local gridPointsCount = 0
+	for key, value in pairs(grid) do
+		if typeof(value) == "Vector3" then
+			gridPointsCount = gridPointsCount + 1
+		end
+	end
+	print("Attempting to visualize", gridPointsCount, "grid points")
+
+	if gridPointsCount == 0 then
+		warn("No valid grid points found to visualize.")
+		return 
+	end
 
 	self.gridVisualizationRoutine = task.spawn(function()
 		local pointsCreated = 0
 		local startTime = os.clock()
 
 		for posKey, pos in pairs(grid) do
-			pointsCreated += 1
-
-			local position
 			if typeof(pos) == "Vector3" then
-				position = pos
-			else
-				position = stringToVector3(posKey)
-				if not position then
-					warn("Invalid position:", posKey)
-					continue
+				pointsCreated += 1
+				local position = pos
+
+				local point = Instance.new("Part")
+				point.Name = "GridPoint_" .. pointsCreated
+				point.Shape = Enum.PartType.Ball
+				point.Size = Vector3.new(options.pointSize, options.pointSize, options.pointSize)
+				point.Position = position
+				point.Anchored = true
+				point.CanCollide = false
+				point.CanQuery = false
+				point.CanTouch = false
+				point.Material = Enum.Material.Neon
+				point.Transparency = options.transparency
+				point.Color = options.pointColorGrid
+				point.Parent = self.gridVisualFolder
+
+				if pointsCreated % 500 == 0 then
+					task.wait()
 				end
-			end
-
-			local point = Instance.new("Part")
-			point.Name = "GridPoint_" .. pointsCreated
-			point.Shape = Enum.PartType.Ball
-			point.Size = Vector3.new(options.pointSize, options.pointSize, options.pointSize)
-			point.Position = position
-			point.Anchored = true
-			point.CanCollide = false
-			point.Material = Enum.Material.Neon
-			point.Transparency = options.transparency
-			point.Color = options.pointColorGrid
-			point.Parent = self.gridVisualFolder
-
-			if pointsCreated % 500 == 0 then -- // 500 Points per Frame
-				task.wait()
 			end
 		end
 
-		print(string.format("Successfully visualized %d points in %.2f seconds", 
+		self.gridVisualizationRoutine = nil
+		print(string.format("Successfully visualized %d points in %.2f seconds",
 			pointsCreated, os.clock() - startTime))
 	end)
 end

@@ -13,6 +13,7 @@
 	- Sigmoid: An activation for the neuron, it returns a value from 0-1. It allows networks non-linearity (Learning Complex Patterns)
 	- Cost: Costs are useful since it provides the error margin through a number using the Output of a neural network and comparing it to the actual output given. It's used to refine the output and eventully get the right Output
 	
+	Currently using: Xavier Initialization, Sigmoids, Softmax, Cross-Entropy to calculate cost, and [-0.1, 0.1] for biases.
 ]]
 
 local LuaNetwork = {}
@@ -35,15 +36,33 @@ function SigmoidDerivative(y: number): number -- // Used for backpropagation to 
 	return y * (1 - y)
 end
 
-function CostCalculator(Outputs: {number}, Expected: {number}): number -- // The (average) amount of error between what my module predicts VS the actual value
+function Softmax(inputs: {number}): {number}
+	local max = inputs[1]
+	for i = 2, #inputs do
+		if inputs[i] > max then max = inputs[i] end
+	end
+	local exp_sum = 0
+	local outputs = {}
+	for i = 1, #inputs do
+		outputs[i] = math.exp(inputs[i] - max)
+		exp_sum += outputs[i]
+	end
+	for i = 1, #inputs do
+		outputs[i] /= exp_sum
+	end
+	return outputs
+end
+
+function CostCalculator(Outputs: {number}, Expected: {number}): number -- // The (average) amount of error between what my module predicts VS the actual value. (Uses Cross-Entropy)
 	local sum = 0
 	for i = 1, #Outputs do
-		sum += (Outputs[i] - Expected[i])^2
+		local pred = math.clamp(Outputs[i], 1e-7, 1 - 1e-7)
+		sum += -Expected[i] * math.log(pred)
 	end
 	return sum / #Outputs
 end
 
-function LuaNetwork:ForwardPropogation(Data: {number}): ({number}, {number})
+function LuaNetwork:ForwardPropagation(Data: {number}): ({number}, {number})
 	local hiddenInputs = {}
 	local hiddenOutputs = {}
 	for j = 1, self.hiddenNodes do
@@ -63,22 +82,23 @@ function LuaNetwork:ForwardPropogation(Data: {number}): ({number}, {number})
 			sum += hiddenOutputs[j] * self.weightsHO[j][k]
 		end
 		outputInputs[k] = sum + self.biasO[k]
-		outputs[k] = Sigmoid(outputInputs[k])
 	end
+	outputs = Softmax(outputInputs)
 
 	return hiddenOutputs, outputs
 end
 
 function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutputs: {number}, Outputs: {number}, LearningRate: number)
 	-- // Backpropagation: Output layer
+	-- // For Softmax with Cross-Entropy, the gradient simplifies to (output - target)
 	local outputGradients = {}
 	for k = 1, self.outputNodes do
-		local error = Target[k] - Outputs[k]
-		outputGradients[k] = error * SigmoidDerivative(Outputs[k])
+		outputGradients[k] = Outputs[k] - Target[k]
+
 		for j = 1, self.hiddenNodes do
-			self.weightsHO[j][k] += LearningRate * outputGradients[k] * HiddenOutputs[j]
+			self.weightsHO[j][k] -= LearningRate * outputGradients[k] * HiddenOutputs[j]
 		end
-		self.biasO[k] += LearningRate * outputGradients[k]
+		self.biasO[k] -= LearningRate * outputGradients[k]
 	end
 
 	-- // Backpropagation: Hidden layer
@@ -90,9 +110,9 @@ function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutp
 		end
 		hiddenGradients[j] = error * SigmoidDerivative(HiddenOutputs[j])
 		for i = 1, self.inputNodes do
-			self.weightsIH[i][j] += LearningRate * hiddenGradients[j] * Data[i]
+			self.weightsIH[i][j] -= LearningRate * hiddenGradients[j] * Data[i]
 		end
-		self.biasH[j] += LearningRate * hiddenGradients[j]
+		self.biasH[j] -= LearningRate * hiddenGradients[j]
 	end
 end
 
@@ -155,7 +175,7 @@ function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: nu
 end
 
 ---------------------------------------------
--- // Propogations
+-- // Propagations
 ---------------------------------------------
 
 --[[
@@ -163,12 +183,12 @@ end
 	
 	- Data: A table of numbers for the neural network to learn from
 ]]
-function LuaNetwork:Predict(Data: {number}): {number} -- // Forward Propogation, I to H
+function LuaNetwork:Predict(Data: {number}): {number} -- // Forward Propagation, I to H
 	if #Data ~= self.inputNodes then
 		error("Data length must equal InputNodes")
 	end
 
-	local _, outputs = self:ForwardPropogation(Data)
+	local _, outputs = self:ForwardPropagation(Data)
 	return outputs
 end
 
@@ -192,7 +212,7 @@ function LuaNetwork:Train(Data: {number}, Target: {number}, LearningRate: number
 	end
 
 	-- // Forward propagation
-	local hiddenOutputs, outputs = self:ForwardPropogation(Data)
+	local hiddenOutputs, outputs = self:ForwardPropagation(Data)
 
 	local cost = CostCalculator(outputs, Target)
 

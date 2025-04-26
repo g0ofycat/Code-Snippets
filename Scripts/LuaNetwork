@@ -1,8 +1,6 @@
 --[[ TODO:
 
-	- Refractor back prop and forward prop
-	- Multiple Hidden layers
-	- Stress test and bug fixes
+	- Multiple Hidden layers	
 
 ]]
 
@@ -45,6 +43,59 @@ function CostCalculator(Outputs: {number}, Expected: {number}): number -- // The
 	return sum / #Outputs
 end
 
+function LuaNetwork:ForwardPropogation(Data: {number}): ({number}, {number})
+	local hiddenInputs = {}
+	local hiddenOutputs = {}
+	for j = 1, self.hiddenNodes do
+		local sum = 0
+		for i = 1, self.inputNodes do
+			sum += Data[i] * self.weightsIH[i][j]
+		end
+		hiddenInputs[j] = sum + self.biasH[j]
+		hiddenOutputs[j] = Sigmoid(hiddenInputs[j])
+	end
+
+	local outputInputs = {}
+	local outputs = {}
+	for k = 1, self.outputNodes do
+		local sum = 0
+		for j = 1, self.hiddenNodes do
+			sum += hiddenOutputs[j] * self.weightsHO[j][k]
+		end
+		outputInputs[k] = sum + self.biasO[k]
+		outputs[k] = Sigmoid(outputInputs[k])
+	end
+
+	return hiddenOutputs, outputs
+end
+
+function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutputs: {number}, Outputs: {number}, LearningRate: number)
+	-- // Backpropagation: Output layer
+	local outputGradients = {}
+	for k = 1, self.outputNodes do
+		local error = Target[k] - Outputs[k]
+		outputGradients[k] = error * SigmoidDerivative(Outputs[k])
+		for j = 1, self.hiddenNodes do
+			self.weightsHO[j][k] += LearningRate * outputGradients[k] * HiddenOutputs[j]
+		end
+		self.biasO[k] += LearningRate * outputGradients[k]
+	end
+
+	-- // Backpropagation: Hidden layer
+	local hiddenGradients = {}
+	for j = 1, self.hiddenNodes do
+		local error = 0
+		for k = 1, self.outputNodes do
+			error += outputGradients[k] * self.weightsHO[j][k]
+		end
+		hiddenGradients[j] = error * SigmoidDerivative(HiddenOutputs[j])
+		for i = 1, self.inputNodes do
+			self.weightsIH[i][j] += LearningRate * hiddenGradients[j] * Data[i]
+		end
+		self.biasH[j] += LearningRate * hiddenGradients[j]
+	end
+end
+
 ---------------------------------------------
 -- // Constructor
 ---------------------------------------------
@@ -61,9 +112,9 @@ function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: nu
 	if InputNodes <= 0 or HiddenNodes <= 0 or OutputNodes <= 0 then
 		error("InputNodes, HiddenNodes, and OutputNodes must be positive")
 	end
-	
+
 	local Random = Seed and Random.new(Seed) or Random.new()
-	
+
 	local self = setmetatable({
 		inputNodes = InputNodes,
 		hiddenNodes = HiddenNodes,
@@ -73,9 +124,9 @@ function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: nu
 		biasH = {}, -- // Biases for the Hidden Neurons
 		biasO = {} -- // Biases for the Output Neurons
 	}, LuaNetwork)
-	
-	-- // Init Weights and Biases for all tables (-1, 1)
-	
+
+	-- // Init Weights and Biases for all tables (-1, 1), (Weights are initialized by Uniform Xavier)
+
 	for i = 1, InputNodes do -- // Weights for Hidden Neuron Connections
 		self.weightsIH[i] = {}
 		for j = 1, HiddenNodes do
@@ -99,7 +150,7 @@ function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: nu
 	for k = 1, OutputNodes do -- // Bias for outputs
 		self.biasO[k] = Random:NextNumber(-0.1, 0.1)
 	end
-	
+
 	return self
 end
 
@@ -117,28 +168,7 @@ function LuaNetwork:Predict(Data: {number}): {number} -- // Forward Propogation,
 		error("Data length must equal InputNodes")
 	end
 
-	local hiddenInputs = {}
-	local hiddenOutputs = {}
-	for j = 1, self.hiddenNodes do -- // Input layer to hidden layer
-		local sum = 0
-		for i = 1, self.inputNodes do -- // Weighted sum for each neuron
-			sum += Data[i] * self.weightsIH[i][j]
-		end
-		hiddenInputs[j] = sum + self.biasH[j] -- // Add bias
-		hiddenOutputs[j] = Sigmoid(hiddenInputs[j]) -- // Non-Linearity, maps the value between 0-1
-	end
-
-	local outputInputs = {}
-	local outputs = {}
-	for k = 1, self.outputNodes do -- // Hidden to output layer, same logic
-		local sum = 0
-		for j = 1, self.hiddenNodes do
-			sum += hiddenOutputs[j] * self.weightsHO[j][k]
-		end
-		outputInputs[k] = sum + self.biasO[k]
-		outputs[k] = Sigmoid(outputInputs[k])
-	end
-
+	local _, outputs = self:ForwardPropogation(Data)
 	return outputs
 end
 
@@ -162,55 +192,12 @@ function LuaNetwork:Train(Data: {number}, Target: {number}, LearningRate: number
 	end
 
 	-- // Forward propagation
-	
-	local hiddenInputs = {}
-	local hiddenOutputs = {}
-	for j = 1, self.hiddenNodes do
-		local sum = 0
-		for i = 1, self.inputNodes do
-			sum += Data[i] * self.weightsIH[i][j]
-		end
-		hiddenInputs[j] = sum + self.biasH[j]
-		hiddenOutputs[j] = Sigmoid(hiddenInputs[j])
-	end
-
-	local outputInputs = {}
-	local outputs = {}
-	for k = 1, self.outputNodes do
-		local sum = 0
-		for j = 1, self.hiddenNodes do
-			sum += hiddenOutputs[j] * self.weightsHO[j][k]
-		end
-		outputInputs[k] = sum + self.biasO[k]
-		outputs[k] = Sigmoid(outputInputs[k])
-	end
+	local hiddenOutputs, outputs = self:ForwardPropogation(Data)
 
 	local cost = CostCalculator(outputs, Target)
 
-	-- // Backpropagation: Output layer
-	local outputGradients = {}
-	for k = 1, self.outputNodes do
-		local error = Target[k] - outputs[k]
-		outputGradients[k] = error * SigmoidDerivative(outputs[k])
-		for j = 1, self.hiddenNodes do
-			self.weightsHO[j][k] += LearningRate * outputGradients[k] * hiddenOutputs[j]
-		end
-		self.biasO[k] += LearningRate * outputGradients[k]
-	end
-
-	-- // Backpropagation: Hidden layer
-	local hiddenGradients = {}
-	for j = 1, self.hiddenNodes do
-		local error = 0
-		for k = 1, self.outputNodes do
-			error += outputGradients[k] * self.weightsHO[j][k]
-		end
-		hiddenGradients[j] = error * SigmoidDerivative(hiddenOutputs[j])
-		for i = 1, self.inputNodes do
-			self.weightsIH[i][j] += LearningRate * hiddenGradients[j] * Data[i]
-		end
-		self.biasH[j] += LearningRate * hiddenGradients[j]
-	end
+	-- // Backpropagation
+	self:BackPropagation(Data, Target, hiddenOutputs, outputs, LearningRate)
 
 	return cost, outputs
 end

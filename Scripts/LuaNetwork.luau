@@ -1,9 +1,3 @@
---[[ TODO:
-
-	- Multiple Hidden layers	
-
-]]
-
 --[[ NOTES:
 	
 	- Each neuron is connected to every single one in the next layer and so on
@@ -13,11 +7,11 @@
 	- Sigmoid: An activation for the neuron, it returns a value from 0-1. It allows networks non-linearity (Learning Complex Patterns)
 	- Cost: Costs are useful since it provides the error margin through a number using the Output of a neural network and comparing it to the actual output given. It's used to refine the output and eventully get the right Output
 	
-	Currently using: Xavier Initialization, Sigmoids, Softmax, Cross-Entropy to calculate cost, and [-0.1, 0.1] for biases.
+	- Currently using: Xavier Initialization, Sigmoids, Softmax, Cross-Entropy to calculate cost, and [-0.1, 0.1] for biases.
+	- You need to flatten the MNIST Dataset and also export the biases and weights, I used python for this.
 ]]
 
 local LuaNetwork = {}
-
 LuaNetwork.__index = LuaNetwork
 
 ---------------------------------------------
@@ -47,7 +41,7 @@ function Softmax(inputs: {number}): {number}
 		outputs[i] = math.exp(inputs[i] - max)
 		exp_sum += outputs[i]
 	end
-	for i = 1, #inputs do
+	for i = 1, #outputs do
 		outputs[i] /= exp_sum
 	end
 	return outputs
@@ -61,6 +55,10 @@ function CostCalculator(Outputs: {number}, Expected: {number}): number -- // The
 	end
 	return sum / #Outputs
 end
+
+---------------------------------------------
+-- // Propagations
+---------------------------------------------
 
 function LuaNetwork:ForwardPropagation(Data: {number}): ({number}, {number})
 	local hiddenInputs = {}
@@ -84,24 +82,19 @@ function LuaNetwork:ForwardPropagation(Data: {number}): ({number}, {number})
 		outputInputs[k] = sum + self.biasO[k]
 	end
 	outputs = Softmax(outputInputs)
-
 	return hiddenOutputs, outputs
 end
 
 function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutputs: {number}, Outputs: {number}, LearningRate: number)
-	-- // Backpropagation: Output layer
-	-- // For Softmax with Cross-Entropy, the gradient simplifies to (output - target)
 	local outputGradients = {}
 	for k = 1, self.outputNodes do
 		outputGradients[k] = Outputs[k] - Target[k]
-
 		for j = 1, self.hiddenNodes do
 			self.weightsHO[j][k] -= LearningRate * outputGradients[k] * HiddenOutputs[j]
 		end
 		self.biasO[k] -= LearningRate * outputGradients[k]
 	end
 
-	-- // Backpropagation: Hidden layer
 	local hiddenGradients = {}
 	for j = 1, self.hiddenNodes do
 		local error = 0
@@ -116,6 +109,13 @@ function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutp
 	end
 end
 
+function LuaNetwork:LoadWeights(weights)
+	self.weightsIH = weights.weightsIH
+	self.weightsHO = weights.weightsHO
+	self.biasH = weights.biasH
+	self.biasO = weights.biasO
+end
+
 ---------------------------------------------
 -- // Constructor
 ---------------------------------------------
@@ -128,7 +128,7 @@ end
     - OutputNodes: The amount of nodes used for the output
     - Seed: Optional parameter to set the seed of Random.new()
 ]]
-function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: number, Seed: number) -- // Constructor
+function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: number, Seed: number, PretrainedWeights: {number}?)
 	if InputNodes <= 0 or HiddenNodes <= 0 or OutputNodes <= 0 then
 		error("InputNodes, HiddenNodes, and OutputNodes must be positive")
 	end
@@ -145,49 +145,43 @@ function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: nu
 		biasO = {} -- // Biases for the Output Neurons
 	}, LuaNetwork)
 
-	-- // Init Weights and Biases for all tables (-1, 1), (Weights are initialized by Uniform Xavier)
-
-	for i = 1, InputNodes do -- // Weights for Hidden Neuron Connections
-		self.weightsIH[i] = {}
+	if PretrainedWeights then -- // Using Python
+		self:LoadWeights(PretrainedWeights)
+	else
+		for i = 1, InputNodes do -- // Init Weights and Biases for all tables (-1, 1), (Weights are initialized by Uniform Xavier)
+			self.weightsIH[i] = {}
+			for j = 1, HiddenNodes do
+				local scaleIH = math.sqrt(6 / (InputNodes + HiddenNodes))
+				self.weightsIH[i][j] = Random:NextNumber(-scaleIH, scaleIH)
+			end
+		end
 		for j = 1, HiddenNodes do
-			local scaleIH = math.sqrt(6 / (InputNodes + HiddenNodes))
-			self.weightsIH[i][j] = Random:NextNumber(-scaleIH, scaleIH)
+			self.weightsHO[j] = {}
+			for k = 1, OutputNodes do
+				local scaleHO = math.sqrt(6 / (HiddenNodes + OutputNodes))
+				self.weightsHO[j][k] = Random:NextNumber(-scaleHO, scaleHO)
+			end
 		end
-	end
-
-	for j = 1, HiddenNodes do -- // Weights for the hidden nodes to the output
-		self.weightsHO[j] = {}
+		for j = 1, HiddenNodes do
+			self.biasH[j] = Random:NextNumber(-0.1, 0.1)
+		end
 		for k = 1, OutputNodes do
-			local scaleHO = math.sqrt(6 / (HiddenNodes + OutputNodes))
-			self.weightsHO[j][k] = Random:NextNumber(-scaleHO, scaleHO)
+			self.biasO[k] = Random:NextNumber(-0.1, 0.1)
 		end
-	end
-
-	for j = 1, HiddenNodes do -- // Bias for hiddens
-		self.biasH[j] = Random:NextNumber(-0.1, 0.1)
-	end
-
-	for k = 1, OutputNodes do -- // Bias for outputs
-		self.biasO[k] = Random:NextNumber(-0.1, 0.1)
 	end
 
 	return self
 end
-
----------------------------------------------
--- // Propagations
----------------------------------------------
 
 --[[
 	:Predict() Used to feed in data to the Neural Network for actual training
 	
 	- Data: A table of numbers for the neural network to learn from
 ]]
-function LuaNetwork:Predict(Data: {number}): {number} -- // Forward Propagation, I to H
+function LuaNetwork:Predict(Data: {number}): {number}
 	if #Data ~= self.inputNodes then
-		error("Data length must equal InputNodes")
+		error(string.format("Predict: Data length is %d, expected %d input nodes", #Data, self.inputNodes))
 	end
-
 	local _, outputs = self:ForwardPropagation(Data)
 	return outputs
 end
@@ -201,24 +195,19 @@ end
 ]]
 function LuaNetwork:Train(Data: {number}, Target: {number}, LearningRate: number): (number, {number})
 	if #Data ~= self.inputNodes then
-		error("Data length must equal InputNodes")
+		error(string.format("Train: Data length is %d, expected %d input nodes", #Data, self.inputNodes))
 	end
 	if #Target ~= self.outputNodes then
-		error("Target length must equal OutputNodes")
+		error(string.format("Train: Target length is %d, expected %d output nodes", #Target, self.outputNodes))
 	end
 	if LearningRate < 0.0001 or LearningRate > 1 then
-		warn("LearningRate should typically be between 0.0001 and 1 for stability")
+		warn(string.format("LearningRate %.4f is outside recommended range [0.0001, 1], clamping", LearningRate))
 		LearningRate = math.clamp(LearningRate, 0.0001, 1)
 	end
 
-	-- // Forward propagation
 	local hiddenOutputs, outputs = self:ForwardPropagation(Data)
-
 	local cost = CostCalculator(outputs, Target)
-
-	-- // Backpropagation
 	self:BackPropagation(Data, Target, hiddenOutputs, outputs, LearningRate)
-
 	return cost, outputs
 end
 

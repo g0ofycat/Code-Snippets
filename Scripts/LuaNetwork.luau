@@ -7,45 +7,18 @@
 	- Sigmoid: An activation for the neuron, it returns a value from 0-1. It allows networks non-linearity (Learning Complex Patterns)
 	- Cost: Costs are useful since it provides the error margin through a number using the Output of a neural network and comparing it to the actual output given. It's used to refine the output and eventully get the right Output
 	
-	- Currently using: Xavier Initialization, Sigmoids, Softmax, Cross-Entropy to calculate cost, and [-0.1, 0.1] for biases.
-	- You need to flatten the MNIST Dataset and also export the biases and weights, I used python for this.
+	- Currently using: Xavier Initialization, Sigmoids, Softmax, Cross-Entropy to calculate cost, 2 feed forward network.
+	- You need to flatten the MNIST Dataset and also export the biases and weights to get actually accurate results, I used Python (Tensorflow Package) for this.
+	- Training is quite useless, just a misc function since training in Roblox is unreliable.
 ]]
 
+local ActivationLib = require(script.ActivationLib)
 local LuaNetwork = {}
 LuaNetwork.__index = LuaNetwork
 
 ---------------------------------------------
 -- // Helper Functions
 ---------------------------------------------
-
-function Sigmoid(x: number): number -- // Activation function in each neuron, both equations produce the same output although both equations are better based on if they're positive or negative
-	if x >= 0 then
-		return 1 / (1 + math.exp(-x))
-	else
-		return math.exp(x) / (1 + math.exp(x))
-	end
-end
-
-function SigmoidDerivative(y: number): number -- // Used for backpropagation to adjust weights and bias
-	return y * (1 - y)
-end
-
-function Softmax(inputs: {number}): {number}
-	local max = inputs[1]
-	for i = 2, #inputs do
-		if inputs[i] > max then max = inputs[i] end
-	end
-	local exp_sum = 0
-	local outputs = {}
-	for i = 1, #inputs do
-		outputs[i] = math.exp(inputs[i] - max)
-		exp_sum += outputs[i]
-	end
-	for i = 1, #outputs do
-		outputs[i] /= exp_sum
-	end
-	return outputs
-end
 
 function CostCalculator(Outputs: {number}, Expected: {number}): number -- // The (average) amount of error between what my module predicts VS the actual value. (Uses Cross-Entropy)
 	local sum = 0
@@ -63,25 +36,25 @@ end
 function LuaNetwork:ForwardPropagation(Data: {number}): ({number}, {number})
 	local hiddenInputs = {}
 	local hiddenOutputs = {}
-	for j = 1, self.hiddenNodes do
+	for j = 1, self.hiddenNodes do -- // Input to Hidden Layer
 		local sum = 0
 		for i = 1, self.inputNodes do
 			sum += Data[i] * self.weightsIH[i][j]
 		end
 		hiddenInputs[j] = sum + self.biasH[j]
-		hiddenOutputs[j] = Sigmoid(hiddenInputs[j])
+		hiddenOutputs[j] = ActivationLib.ReLU(hiddenInputs[j])
 	end
 
 	local outputInputs = {}
 	local outputs = {}
-	for k = 1, self.outputNodes do
+	for k = 1, self.outputNodes do -- // Hidden Layer to Output Layer
 		local sum = 0
 		for j = 1, self.hiddenNodes do
 			sum += hiddenOutputs[j] * self.weightsHO[j][k]
 		end
 		outputInputs[k] = sum + self.biasO[k]
 	end
-	outputs = Softmax(outputInputs)
+	outputs = ActivationLib.Softmax(outputInputs)
 	return hiddenOutputs, outputs
 end
 
@@ -101,7 +74,7 @@ function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutp
 		for k = 1, self.outputNodes do
 			error += outputGradients[k] * self.weightsHO[j][k]
 		end
-		hiddenGradients[j] = error * SigmoidDerivative(HiddenOutputs[j])
+		hiddenGradients[j] = error * ActivationLib.SigmoidDerivative(HiddenOutputs[j])
 		for i = 1, self.inputNodes do
 			self.weightsIH[i][j] -= LearningRate * hiddenGradients[j] * Data[i]
 		end
@@ -187,7 +160,7 @@ function LuaNetwork:Predict(Data: {number}): {number}
 end
 
 --[[
-	:Train() Used to train the data using Forward and Backpropagation
+	:Train() Used to train the data using Forward and Backpropagation. (Changes Weights and Biases, don't use if you already have pre determined weights)
 	
 	- Data: A table of numbers for the neural network to learn from
 	- Target: A table that has the desired values you want the Neural Network to learn

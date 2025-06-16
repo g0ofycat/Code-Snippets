@@ -1,5 +1,6 @@
 local MatchmakingHandler = {}
 local playerQueueKeys = {} -- // Stores the timestamp for each player based on their UserId and their modes
+local localQueueCounts = {} -- // Tracks the amount of players in each queue. Stops all MemoryStoreService calls if there's noone in there
 local heartbeatConnection
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local MessagingService = game:GetService("MessagingService")
@@ -228,6 +229,7 @@ function MatchmakingHandler:MatchMake(mode: string, subMode: string)
 	end
 
 	isProcessingMatch[queueKey] = true
+	
 	local success, err = pcall(function()
 		self:ProcessMatchmaking(mode, subMode, queueKey)
 	end)
@@ -245,6 +247,7 @@ function MatchmakingHandler:CanStartMatchmaking(queueKey: string, subMode: strin
 	end
 
 	local matchSize = getMatchSize(subMode)
+	
 	if matchSize % 2 ~= 0 then
 		warn("Invalid match size for", subMode, "- must be even number")
 		return false
@@ -257,13 +260,13 @@ function MatchmakingHandler:ProcessMatchmaking(mode: string, subMode: string, qu
 	self:RequestCrossServerMatchmaking(mode, subMode)
 
 	local allPlayers = self:CollectPlayers(mode, subMode, queueKey)
-	print("Cross-server matchmaking: Found", #allPlayers, "total players for", mode, subMode)
 
 	if #allPlayers < getMatchSize(subMode) then
 		return
 	end
-
+	
 	local bestGroup = self:FindOptimalPlayerGroup(allPlayers, subMode)
+	
 	if bestGroup then
 		self:CreateCrossServerMatch(bestGroup, mode, subMode)
 	end
@@ -271,18 +274,23 @@ end
 
 function MatchmakingHandler:CollectPlayers(mode: string, subMode: string, queueKey: string): {any}
 	local allPlayers = {}
-	local queue = getQueue(mode, subMode)
-	local batchSize = math.min(200, getMatchSize(subMode) * Settings.Matches.BATCH_SIZE)
 
-	local success, result = pcall(function()
-		return queue:GetRangeAsync(Enum.SortDirection.Ascending, batchSize)
-	end)
+	local localCount = localQueueCounts[queueKey] or 0
+	if localCount > 0 then
+		local queue = getQueue(mode, subMode)
+		print("Cross-server matchmaking: Found", queue:GetSizeAsync(), "total players for", mode, subMode)
+		local batchSize = math.min(200, getMatchSize(subMode) * Settings.Matches.BATCH_SIZE)
 
-	if success and result then
-		for _, entry in ipairs(result) do
-			local playerData = self:ParseQueueEntry(entry)
-			if playerData then
-				table.insert(allPlayers, playerData)
+		local success, result = pcall(function()
+			return queue:GetRangeAsync(Enum.SortDirection.Ascending, batchSize)
+		end)
+
+		if success and result then
+			for _, entry in ipairs(result) do
+				local playerData = self:ParseQueueEntry(entry)
+				if playerData then
+					table.insert(allPlayers, playerData)
+				end
 			end
 		end
 	end
@@ -491,6 +499,17 @@ function MatchmakingHandler:CreateCrossServerMatch(players: {any}, mode: string,
 		table.insert(playersByServer[serverId], playerData.UserId)
 	end
 
+	local queueKey = mode .. "_" .. subMode
+	local localPlayersRemoved = 0
+
+	for _, playerData in ipairs(players) do
+		if playerData.ServerId == Settings.Information.SERVER_ID then
+			localPlayersRemoved += 1
+		end
+	end
+
+	localQueueCounts[queueKey] = math.max(0, (localQueueCounts[queueKey] or 0) - localPlayersRemoved)
+
 	if removalFailures > 0 then
 		warn(removalFailures, "queue removal failures occurred")
 	end
@@ -543,7 +562,7 @@ function MatchmakingHandler:HandleTeleportRequest(data)
 	print("Teleporting", #playersToTeleport, "players to cross-server match")
 
 	local playersToRetry = playersToTeleport
-	local maxRetries = Settings.Matches.TELEPORT_RETRIES or 3
+	local maxRetries = Settings.Matches.TELEPORT_RETRIES
 
 	for attempt = 1, maxRetries do
 		if #playersToRetry == 0 then break end
@@ -624,16 +643,17 @@ function MatchmakingHandler:QueuePlayer(player: Player, ELO: number, mode: strin
 
 	if not success then
 		warn("Failed to queue player:", err)
-
 		if playerQueueKeys[player.UserId] then
 			playerQueueKeys[player.UserId][queueKey] = nil
 		end
 		return false
 	else
+		localQueueCounts[queueKey] = math.max(0, (localQueueCounts[queueKey] or 0) + 1)
 		print("Queued player", player.Name, "for", mode, subMode, "mode. Region: "..playerContinent)
 		return true
 	end
 end
+
 
 function MatchmakingHandler:StopQueue(player: Player)
 	if not player or not player.UserId then return false end
@@ -650,7 +670,9 @@ function MatchmakingHandler:StopQueue(player: Player)
 			local success = pcall(function()
 				getQueue(mode, subMode):RemoveAsync(keyToRemove)
 			end)
-			if not success then
+			if success then
+				localQueueCounts[queueKey] = math.max(0, (localQueueCounts[queueKey] or 0) - 1)
+			else
 				warn("Failed to remove from queue:", queueKey)
 				allSuccess = false
 			end
@@ -662,7 +684,6 @@ function MatchmakingHandler:StopQueue(player: Player)
 	end)
 
 	playerQueueKeys[player.UserId] = nil
-
 	return allSuccess
 end
 

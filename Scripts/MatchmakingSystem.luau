@@ -110,7 +110,7 @@ local function setupMessagingService()
 	if success then
 		messagingConnections.crossServerTeleport = connection
 	end
-	
+
 	success, connection = pcall(function()
 		return MessagingService:SubscribeAsync("QueueStatusRequest", function(message) -- // This is NOT the same as the MatchmakingRequest SubscribeAsync even though they (basically) have the same logic. 
 			warn("QueueStatusRequest")
@@ -200,7 +200,7 @@ function MatchmakingHandler:ReceiveQueueStatus(data) -- // Stores the Cross Serv
 	end
 
 	local queueKey = data.Mode .. "_" .. data.SubMode
-	
+
 	if not self.crossServerData[queueKey] then
 		self.crossServerData[queueKey] = {}
 	end
@@ -233,7 +233,7 @@ function MatchmakingHandler:MatchMake(mode: string, subMode: string)
 	end)
 
 	isProcessingMatch[queueKey] = false
-	
+
 	if not success then
 		warn("Error in CrossServerMatchMake:", err, debug.traceback())
 	end
@@ -529,7 +529,6 @@ end
 function MatchmakingHandler:HandleTeleportRequest(data)
 	local playersToTeleport = {}
 	local playerIds = data.PlayersForServer[Settings.Information.SERVER_ID]
-
 	if not playerIds then return end
 
 	for _, userId in ipairs(playerIds) do
@@ -539,14 +538,21 @@ function MatchmakingHandler:HandleTeleportRequest(data)
 		end
 	end
 
-	if #playersToTeleport > 0 then
-		print("Teleporting", #playersToTeleport, "players to cross-server match")
+	if #playersToTeleport == 0 then return end
+
+	print("Teleporting", #playersToTeleport, "players to cross-server match")
+
+	local playersToRetry = playersToTeleport
+	local maxRetries = Settings.Matches.TELEPORT_RETRIES or 3
+
+	for attempt = 1, maxRetries do
+		if #playersToRetry == 0 then break end
 
 		local success, err = pcall(function()
 			TeleportService:TeleportToPrivateServer(
 				data.PlaceId,
 				data.ServerCode,
-				playersToTeleport,
+				playersToRetry,
 				nil,
 				{
 					MatchId = data.MatchId,
@@ -556,9 +562,33 @@ function MatchmakingHandler:HandleTeleportRequest(data)
 			)
 		end)
 
-		if not success then
-			warn("Failed to teleport players:", err)
+		if success then
+			print(`Successfully teleported {#playersToRetry} players on attempt {attempt}`)
+			break
+		else
+			warn(`Failed to teleport players: {err}. Attempt: {attempt}/{maxRetries}`)
+
+			local stillValidPlayers = {}
+			for _, player in ipairs(playersToRetry) do
+				if player.Parent and Players:GetPlayerByUserId(player.UserId) then
+					table.insert(stillValidPlayers, player)
+				end
+			end
+			playersToRetry = stillValidPlayers
+
+			if attempt < maxRetries and #playersToRetry > 0 then
+				task.wait(0.5 + (attempt * 0.2)) -- // Exponential backoff: 0.7s, 0.9s, 1.1s
+			end
 		end
+	end
+
+	if #playersToRetry > 0 then
+		warn(`Failed to teleport {#playersToRetry} players after {maxRetries} attempts`)
+		local playerIds = {}
+		for _, player in ipairs(playersToRetry) do
+			table.insert(playerIds, player.UserId)
+		end
+		self:UnlockPlayers(playerIds)
 	end
 end
 
@@ -630,7 +660,7 @@ function MatchmakingHandler:StopQueue(player: Player)
 	pcall(function()
 		lockMap:RemoveAsync(tostring(player.UserId))
 	end)
-	
+
 	playerQueueKeys[player.UserId] = nil
 
 	return allSuccess
@@ -640,7 +670,7 @@ function MatchmakingHandler:Cleanup()
 	for _, connection in pairs(messagingConnections) do
 		pcall(function() connection:Disconnect() end)
 	end
-	
+
 	messagingConnections = {}
 
 	queueCache = {}
@@ -654,7 +684,7 @@ function MatchmakingHandler:Cleanup()
 	if heartbeatConnection then
 		heartbeatConnection:Disconnect()
 	end
-	
+
 	isProcessingMatch = {}
 end
 

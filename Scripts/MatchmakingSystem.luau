@@ -271,7 +271,7 @@ function MatchmakingHandler:CollectPlayers(mode: string, subMode: string, queueK
 	local queue = getQueue(mode, subMode)
 	local batchSize = math.min(200, getMatchSize(subMode) * Settings.Matches.BATCH_SIZE)
 
-	print("Processing matchmaking: Found", queue:GetSizeAsync(), "total players for", mode, subMode)
+	print("Processing matchmaking: Found", localQueueCounts[queueKey], "total players for", mode, subMode)
 
 	local success, result = pcall(function()
 		return queue:GetRangeAsync(Enum.SortDirection.Ascending, batchSize)
@@ -720,8 +720,9 @@ end
 function MatchmakingHandler:GetQueuedPlayers(mode: string, subMode: string): {number}
 	local queue = getQueue(mode, subMode)
 	local players = {}
+	local batchSize = math.min(200, getMatchSize(subMode) * Settings.Matches.BATCH_SIZE)
 	local success, result = pcall(function()
-		return queue:GetRangeAsync(Enum.SortDirection.Ascending, 200)
+		return queue:GetRangeAsync(Enum.SortDirection.Ascending, batchSize)
 	end)
 
 	if success and result then

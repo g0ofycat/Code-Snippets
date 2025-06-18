@@ -137,21 +137,6 @@ local function setupMessagingService()
 	end
 
 	success, connection = pcall(function()
-		return MessagingService:SubscribeAsync("QueueStatusRequest", function(message) -- // This is NOT the same as the MatchmakingRequest SubscribeAsync even though they (basically) have the same logic. I have no idea why the matchmaking doesn't work without this. There's no PublishAsync for this and it's completley useless
-			local data = message.Data
-			if data.RequestingServer ~= Settings.Information.SERVER_ID then
-				task.spawn(function()
-					MatchmakingHandler:SendQueueStatus(data.Mode, data.SubMode, data.RequestingServer)
-				end)
-			end
-		end)
-	end)
-
-	if success then
-		messagingConnections.queueStatusRequest = connection
-	end
-
-	success, connection = pcall(function()
 		return MessagingService:SubscribeAsync("QueueStatusResponse", function(message)
 			local data = message.Data
 			if data.TargetServer == Settings.Information.SERVER_ID then

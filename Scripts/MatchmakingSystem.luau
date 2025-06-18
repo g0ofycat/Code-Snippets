@@ -12,7 +12,7 @@ local RunService = game:GetService("RunService")
 -- // TRACKERS
 
 local playerQueueKeys = {} -- // Stores the timestamp for each player based on their UserId and their modes
-local localQueueCounts = {} -- // Tracks the amount of players in each queue. Stops all MemoryStoreService calls if there's noone in there
+local localQueueCounts = {} -- // Tracks the amount of players in each queue. Stops all MemoryStoreService calls if there's noone in a certain subMode's mode
 local isProcessingMatch = {} -- // Stores booleans for each player
 
 local queueCache = {} -- // Stores Match Queue Maps
@@ -83,26 +83,18 @@ local function cleanupCaches()
 	lastCacheCleanup = now
 end
 
-function MatchmakingHandler:Cleanup()
-	for _, connection in pairs(messagingConnections) do
-		pcall(function() connection:Disconnect() end)
-	end
-
-	messagingConnections = {}
-
-	queueCache = {}
-
-	if self.crossServerData then
-		self.crossServerData = {}
-	end
-
-	playerQueueKeys = {}
-
-	if heartbeatConnection then
-		heartbeatConnection:Disconnect()
-	end
-
-	isProcessingMatch = {}
+function generatePlayerQueueData(player: Player, ELO: number, continent: string, subMode: string): string
+	local timestamp = math.floor(tick() * 1000)
+	local key = string.format("%010d", timestamp) .. "_" .. tostring(player.UserId)
+	local data = {
+		UserId = player.UserId,
+		ELO = ELO,
+		JoinTime = timestamp,
+		ServerId = Settings.Information.SERVER_ID,
+		Continent = continent,
+		SubMode = subMode
+	}
+	return timestamp, key, HttpService:JSONEncode(data)
 end
 
 -- // MESSAGING SERVICE HANDLERS
@@ -252,7 +244,7 @@ end
 
 -- // MATCH-MAKING
 
-function MatchmakingHandler:CanStartMatchmaking(queueKey: string, subMode: string): boolean
+function MatchmakingHandler:CanStartMatchmaking(queueKey: string, subMode: string): boolean -- // Just some basic checks before getting into real matchmaking
 	if isProcessingMatch[queueKey] then
 		return false
 	end
@@ -268,41 +260,49 @@ function MatchmakingHandler:CanStartMatchmaking(queueKey: string, subMode: strin
 end
 
 function MatchmakingHandler:ProcessMatchmaking(mode: string, subMode: string, queueKey: string)
-	self:RequestCrossServerMatchmaking(mode, subMode)
-
 	local allPlayers = self:CollectPlayers(mode, subMode, queueKey)
 
-	if #allPlayers < getMatchSize(subMode) then
+	if not allPlayers or #allPlayers == 0 or #allPlayers < getMatchSize(subMode) then
 		return
 	end
+	
+	self:RequestCrossServerMatchmaking(mode, subMode)
 
 	local bestGroup = self:FindOptimalPlayerGroup(allPlayers, subMode)
 
 	if bestGroup then
 		self:CreateCrossServerMatch(bestGroup, mode, subMode)
+	else
+		warn("No optimal group found for", mode, subMode)
 	end
 end
 
 function MatchmakingHandler:CollectPlayers(mode: string, subMode: string, queueKey: string): {any}
+	if not localQueueCounts[queueKey] or localQueueCounts[queueKey] == 0 then
+		return {}
+	end
+
 	local allPlayers = {}
 	local queue = getQueue(mode, subMode)
-
 	local batchSize = math.min(200, getMatchSize(subMode) * Settings.Matches.BATCH_SIZE)
+
 	print("Processing matchmaking: Found", queue:GetSizeAsync(), "total players for", mode, subMode)
 
 	local success, result = pcall(function()
 		return queue:GetRangeAsync(Enum.SortDirection.Ascending, batchSize)
 	end)
 
-	if success and result then
+	if success and type(result) == "table" then
 		for _, entry in ipairs(result) do
 			local playerData = self:ParseQueueEntry(entry)
 			if playerData then
 				table.insert(allPlayers, playerData)
 			end
 		end
+	else
+		warn("Failed to collect players from queue:", queueKey)
 	end
-	
+
 	return allPlayers
 end
 
@@ -625,17 +625,8 @@ function MatchmakingHandler:QueuePlayer(playerOrList: Player | {Player}, ELO: nu
 			warn(player.Name .. " is already in the queue for mode:", mode, subMode)
 			continue
 		end
-
-		local timestamp = math.floor(tick() * 1000)
-		local key = string.format("%020d", timestamp) .. "_" .. tostring(player.UserId)
-		local data = HttpService:JSONEncode({
-			UserId = player.UserId,
-			ELO = ELO,
-			JoinTime = timestamp,
-			ServerId = Settings.Information.SERVER_ID,
-			Continent = playerContinent,
-			SubMode = subMode
-		})
+		
+		local timestamp, key, data = generatePlayerQueueData(playerOrList, ELO, playerContinent, subMode)
 
 		if not playerQueueKeys[player.UserId] then
 			playerQueueKeys[player.UserId] = {}
@@ -657,7 +648,7 @@ function MatchmakingHandler:QueuePlayer(playerOrList: Player | {Player}, ELO: nu
 end
 
 -- Stops the player(s) queue for every Mode and subMode
--- @param playerOrList The player(s) to stop queuing. Pass a list to bulk remove
+-- @param playerOrList: The player(s) to stop queuing. Pass a list to bulk remove
 function MatchmakingHandler:StopQueue(playerOrList: Player | {Player}): boolean
 	local players = typeof(playerOrList) == "Instance" and { playerOrList } or playerOrList
 	local allSuccess = true
@@ -718,6 +709,97 @@ function MatchmakingHandler:MatchMake(mode: string, subMode: string)
 	if not success then
 		warn("Error in CrossServerMatchMake:", err, debug.traceback())
 	end
+end
+
+-- // MISC FUNCTIONS
+
+-- Cleanup(): Cleans up all caches
+function MatchmakingHandler:Cleanup()
+	for _, connection in pairs(messagingConnections) do
+		pcall(function() connection:Disconnect() end)
+	end
+
+	messagingConnections = {}
+
+	queueCache = {}
+
+	if self.crossServerData then
+		self.crossServerData = {}
+	end
+ 
+	playerQueueKeys = {}
+
+	if heartbeatConnection then
+		heartbeatConnection:Disconnect()
+	end
+
+	isProcessingMatch = {}
+end
+
+-- IsPlayerQueued(): Checks if a player is queued in a certain subMode's mode
+-- @param player: The player to check
+-- @param mode: The mode the player should be queued to (Settings.Modes)
+-- @param subMode: The Sub-Mode the player should be queued to (Keys of Settings.MODE_CONFIG)
+function MatchmakingHandler:IsPlayerQueued(player: Player, mode: string?, subMode: string?): boolean
+	local queues = playerQueueKeys[player.UserId]
+	if not queues then return false end
+
+	if mode and subMode then
+		local key = mode .. "_" .. subMode
+		return queues[key] ~= nil
+	end
+
+	return next(queues) ~= nil
+end
+
+-- GetQueuedPlayers(): Get all of the queued players in a subMode's mode
+-- @param mode: The mode the player should be queued to (Settings.Modes)
+-- @param subMode: The Sub-Mode the player should be queued to (Keys of Settings.MODE_CONFIG)
+function MatchmakingHandler:GetQueuedPlayers(mode: string, subMode: string): {number}
+	local queue = getQueue(mode, subMode)
+	local players = {}
+	local success, result = pcall(function()
+		return queue:GetRangeAsync(Enum.SortDirection.Ascending, 200)
+	end)
+
+	if success and result then
+		for _, entry in result do
+			local data = HttpService:JSONDecode(entry.Value)
+			table.insert(players, data.UserId)
+		end
+	end
+
+	return players
+end
+
+-- GetPlayerJoinTime(): Gets the players join time in a subMode's mode
+-- @param player: The player to check
+-- @param mode: The mode the player should be queued to (Settings.Modes)
+-- @param subMode: The Sub-Mode the player should be queued to (Keys of Settings.MODE_CONFIG)
+function MatchmakingHandler:GetPlayerJoinTime(player: Player, mode: string, subMode: string): number?
+	local queueKey = mode .. "_" .. subMode
+	local key = playerQueueKeys[player.UserId] and playerQueueKeys[player.UserId][queueKey]
+	if not key then return nil end
+
+	local queue = getQueue(mode, subMode)
+	local success, value = pcall(function()
+		return queue:GetAsync(key)
+	end)
+
+	if success and value then
+		local data = HttpService:JSONDecode(value)
+		return data.JoinTime
+	end
+
+	return nil
+end
+
+-- GetQueueCount(): Gets the local queue count in a subMode's mode
+-- @param mode: The mode the player should be queued to (Settings.Modes)
+-- @param subMode: The Sub-Mode the player should be queued to (Keys of Settings.MODE_CONFIG)
+function MatchmakingHandler:GetQueueCount(mode: string, subMode: string): number
+	local key = mode .. "_" .. subMode
+	return localQueueCounts[key] or 0
 end
 
 -- // INITIALIZATION

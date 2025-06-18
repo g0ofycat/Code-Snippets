@@ -325,29 +325,6 @@ function MatchmakingHandler:ParseQueueEntry(entry: any)
 	}
 end
 
-function MatchmakingHandler:MergeCrossServerPlayers(allPlayers: {any}, mode: string, subMode: string)
-	local queueKey = mode.."_"..subMode
-	local currentTime = tick()
-	local ttl = Settings.Matches.CROSS_SERVER_DATA_TTL
-
-	for serverId, serverData in pairs(self.crossServerData[queueKey]) do
-		if currentTime - serverData.Timestamp < ttl then
-			for _, playerData in ipairs(serverData.Players) do
-				table.insert(allPlayers, {
-					UserId = playerData.UserId,
-					ELO = playerData.ELO,
-					JoinTime = playerData.JoinTime,
-					QueueKey = playerData.QueueKey,
-					ServerId = serverId,
-					Continent = playerData.Continent or "Unknown"
-				})
-			end
-		else
-			self.crossServerData[queueKey][serverId] = nil
-		end
-	end
-end
-
 function MatchmakingHandler:FindOptimalPlayerGroup(allPlayers: {any}, subMode: string): {any}?
 	local matchSize = getMatchSize(subMode)
 	local continentGroups = self:GroupPlayersByContinent(allPlayers)

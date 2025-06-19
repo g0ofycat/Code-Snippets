@@ -363,21 +363,24 @@ function MatchmakingHandler:FindBestGroup(players: {any}, matchSize: number)
 			table.insert(group, players[j])
 		end
 
-		local longestWait = 0
-		for _, player in pairs(group) do
-			local waitTime = currentTime - player.JoinTime
-			longestWait = math.max(longestWait, waitTime)
-		end
-
-		local baseSpread = Settings.Matches.ELO_CHANGE or 200
-		local increaseRate = Settings.Matches.ELO_INCREASE_RATE or 5
-		local allowedSpread = baseSpread + (longestWait * increaseRate)
-
 		local minELO = group[1].ELO
 		local maxELO = group[#group].ELO
 		local actualSpread = maxELO - minELO
 
-		if actualSpread <= allowedSpread and actualSpread < bestSpread then
+		local groupValid = true
+		for _, player in pairs(group) do
+			local waitTime = currentTime - player.JoinTime
+			local baseSpread = Settings.Matches.ELO_CHANGE or 200
+			local increaseRate = Settings.Matches.ELO_INCREASE_RATE or 5
+			local playerAllowedSpread = baseSpread + (waitTime * increaseRate)
+
+			if actualSpread > playerAllowedSpread then
+				groupValid = false
+				break
+			end
+		end
+
+		if groupValid and actualSpread < bestSpread then
 			bestSpread = actualSpread
 			bestGroup = group
 			if actualSpread == 0 then

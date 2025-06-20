@@ -369,7 +369,7 @@ function MatchmakingHandler:FindBestGroup(players: {any}, matchSize: number)
 
 		local groupValid = true
 		for _, player in pairs(group) do
-			local waitTime = currentTime - player.JoinTime
+			local waitTime = math.max(0, currentTime - (player.JoinTime or currentTime))
 			local baseSpread = Settings.Matches.ELO_CHANGE or 200
 			local increaseRate = Settings.Matches.ELO_INCREASE_RATE or 5
 			local playerAllowedSpread = baseSpread + (waitTime * increaseRate)
@@ -412,11 +412,17 @@ function MatchmakingHandler:CreateCrossServerMatch(players: {any}, mode: string,
 		end
 
 		local success, err = pcall(function()
-			return lockMap:UpdateAsync(tostring(playerData.UserId), {
-				Status = "InMatch",
-				MatchId = Settings.Information.SERVER_ID,
-				Timestamp = tick()
-			}, Settings.Matches.LOCK_TIMEOUT)
+			return lockMap:UpdateAsync(
+				tostring(playerData.UserId), 
+				function(oldData)
+					return {
+						Status = "InMatch", 
+						MatchId = Settings.Information.SERVER_ID, 
+						Timestamp = tick() 
+					}
+				end,
+				Settings.Matches.LOCK_TIMEOUT
+			)
 		end)
 
 		if not success then

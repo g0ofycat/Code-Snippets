@@ -208,7 +208,7 @@ def save_weights_to_lua(model, filename="Weights.lua"):
 
         # Linear Layer 1 (folded) - [Input][Hidden]
         f.write("Weights.weightsIH = { -- // [Input][Hidden]\n")
-        for i in range(weights_ih_folded.shape[0]):  # 784 inputs
+        for i in range(weights_ih_folded.shape[0]): # 784 inputs
             f.write("  {")
             f.write(",".join(f"{w:.8f}" for w in weights_ih_folded[i, :]))
             f.write("},\n")
@@ -216,7 +216,7 @@ def save_weights_to_lua(model, filename="Weights.lua"):
 
         # Linear Layer 2 - [Hidden][Output]
         f.write("Weights.weightsHO = { -- // [Hidden][Output]\n")
-        for j in range(weights_ho.shape[0]):  # 256 hidden
+        for j in range(weights_ho.shape[0]): # 256 hidden
             f.write("  {")
             f.write(",".join(f"{w:.8f}" for w in weights_ho[j, :]))
             f.write("},\n")

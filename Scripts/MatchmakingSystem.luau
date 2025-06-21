@@ -83,7 +83,7 @@ local function cleanupCaches()
 	lastCacheCleanup = now
 end
 
-function generatePlayerQueueData(player: Player, ELO: number, continent: string, subMode: string): string
+function generatePlayerQueueData(player: Player, ELO: number, continent: string, subMode: string): (number, string, string)
 	local timestamp = math.floor(tick() * 1000)
 	local key = string.format("%010d", timestamp) .. "_" .. tostring(player.UserId)
 	local data = {

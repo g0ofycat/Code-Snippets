@@ -81,7 +81,7 @@ local function applyBrush(x, y) -- // Drawing Functionality, kinda like a soft-b
 	updateSinglePixel(x - 1, y + 1, 0.5)
 end
 
-local function centerGridData(currentGrid) -- // Useful since offset centered drawn numbers don't matter now; "Now draw a small 3 in the corner 🤓"; It works you bitch. The MNIST data set is centered although I did add some data augmentation to the MNISTData and some noise
+local function centerGridData(currentGrid) -- // Useful since offset centered drawn numbers don't matter now. The MNIST data set is centered although I did add some data augmentation to the MNISTData and some noise
 	local weightedXSum = 0
 	local weightedYSum = 0
 	local totalMass = 0

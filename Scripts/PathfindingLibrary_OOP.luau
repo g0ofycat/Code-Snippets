@@ -1,3 +1,5 @@
+-- // this module lowk over enginnered shit slop go read other modules i made
+
 --[[	README:
 	
 	- Turn StreamingEnabled off, the CreateWorldGrid relies on Raycasting which may not work if the grid and you are far away. This can lead to obstacles just not be rendered and raycasting passing through it

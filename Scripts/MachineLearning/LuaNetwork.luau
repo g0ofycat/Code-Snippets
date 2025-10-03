@@ -4,26 +4,39 @@
 --[[ NOTES:
 	
 	- Each neuron is connected to every single one in the next layer and so on
-	- Weights: The strength of the 	connections between each neuron
+	- Weights: The strength of the connections between each neuron
 	- Biases: Makes the result more offset, allowing for (possibly) better responses
-	- Neurons: A single neuron that makes up a whole neural network, each neural is fed a weighted sum from the previous layer, it's then added plus the bias. (WeightedSum + Bias)
+	- Neurons: A single neuron that makes up a whole neural network, each neuron is fed a weighted sum from the previous layer, it's then added plus the bias. (WeightedSum + Bias)
 	- Sigmoid: An activation for the neuron, it returns a value from 0-1. It allows networks non-linearity (Learning Complex Patterns)
-	- Cost: Costs are useful since it provides the error margin through a number using the Output of a neural network and comparing it to the actual output given. It's used to refine the output and eventully get the right Output
+	- Cost: Costs are useful since it provides the error margin through a number using the Output of a neural network and comparing it to the actual output given. It's used to refine the output and eventually get the right Output
 	
 	- Currently using: Xavier Initialization, ReLU, Softmax, Cross-Entropy to calculate cost, 2 feed forward network.
 	- You need to flatten the MNIST Dataset and also export the biases and weights to get actually accurate results, I used Python (Tensorflow) for this.
 	- Training is quite useless, just a misc function since training in Roblox is unreliable.
 ]]
 
+-- ========================
+-- // IMPORTS
+-- ========================
+
 local ActivationLib = require(script.ActivationLib)
+
+-- ========================
+-- // MAIN MODULE
+-- ========================
+
 local LuaNetwork = {}
 LuaNetwork.__index = LuaNetwork
 
----------------------------------------------
--- // Helper Functions
----------------------------------------------
+-- ========================
+-- // HELPERS
+-- ========================
 
-function CostCalculator(Outputs: {number}, Expected: {number}): number -- // The (average) amount of error between what my module predicts VS the actual value. (Uses Cross-Entropy)
+-- CostCalculator(): Calculates the average error between predictions and expected values (Cross-Entropy).
+-- @param Outputs: Predicted values
+-- @param Expected: Expected values
+-- @return cost: The average error
+local function CostCalculator(Outputs: {number}, Expected: {number}): number
 	local sum = 0
 	for i = 1, #Outputs do
 		local pred = math.clamp(Outputs[i], 1e-7, 1 - 1e-7)
@@ -32,38 +45,48 @@ function CostCalculator(Outputs: {number}, Expected: {number}): number -- // The
 	return sum / #Outputs
 end
 
----------------------------------------------
--- // Propagations
----------------------------------------------
+-- ========================
+-- // PROPAGATION
+-- ========================
 
+-- Propagates input data through the network.
+-- @param Data: Input values
+-- @return hiddenOutputs: Hidden layer outputs
+-- @return outputs: Final outputs
 function LuaNetwork:ForwardPropagation(Data: {number}): ({number}, {number})
-	local hiddenInputs = {}
-	local hiddenOutputs = {}
-	for j = 1, self.hiddenNodes do -- // Input to Hidden Layer
+	local hiddenInputs, hiddenOutputs = {}, {}
+
+	for j = 1, self.hiddenNodes do -- // Input -> Hidden Layer
 		local sum = 0
 		for i = 1, self.inputNodes do
 			sum += Data[i] * self.weightsIH[i][j]
 		end
 		hiddenInputs[j] = sum + self.biasH[j]
-		hiddenOutputs[j] = ActivationLib.ReLU(hiddenInputs[j]) -- // ReLU for rest of Layers
+		hiddenOutputs[j] = ActivationLib.ReLU(hiddenInputs[j])
 	end
 
 	local outputInputs = {}
-	local outputs = {}
-	for k = 1, self.outputNodes do -- // Hidden Layer to Output Layer
+	for k = 1, self.outputNodes do -- // Hidden Layer -> Output Layer
 		local sum = 0
 		for j = 1, self.hiddenNodes do
 			sum += hiddenOutputs[j] * self.weightsHO[j][k]
 		end
 		outputInputs[k] = sum + self.biasO[k]
 	end
-	outputs = ActivationLib.Softmax(outputInputs) -- // Softmax for the outputs
+
+	local outputs = ActivationLib.Softmax(outputInputs)
 	return hiddenOutputs, outputs
 end
 
--- // Obviously this is just a helper function since BackPropagation is used in training. Do training on like python or something
+-- BackPropagation(): Adjusts weights/biases based on error (used in training).
+-- @param Data: Input data
+-- @param Target: Expected outputs
+-- @param HiddenOutputs: Hidden layer outputs
+-- @param Outputs: Final outputs
+-- @param LearningRate: Adjustment rate
 function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutputs: {number}, Outputs: {number}, LearningRate: number)
 	local outputGradients = {}
+
 	for k = 1, self.outputNodes do
 		outputGradients[k] = Outputs[k] - Target[k]
 		for j = 1, self.hiddenNodes do
@@ -86,6 +109,8 @@ function LuaNetwork:BackPropagation(Data: {number}, Target: {number}, HiddenOutp
 	end
 end
 
+-- LoadWeights(): Loads pre-trained weights and biases.
+-- @param weights table Table containing weightsIH, weightsHO, biasH, biasO
 function LuaNetwork:LoadWeights(weights)
 	self.weightsIH = weights.weightsIH
 	self.weightsHO = weights.weightsHO
@@ -93,19 +118,18 @@ function LuaNetwork:LoadWeights(weights)
 	self.biasO = weights.biasO
 end
 
----------------------------------------------
--- // Constructor
----------------------------------------------
+-- ========================
+-- // MAIN
+-- ========================
 
---[[
-    :New() The actual constructor for the function, handles the weights and biases for the neurons.
-    
-    - InputNodes: The amount of nodes used for the input
-    - HiddenNodes: The amount of nodes used for the hidden layers
-    - OutputNodes: The amount of nodes used for the output
-    - Seed: Optional parameter to set the seed of Random.new()
-]]
-function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: number, Seed: number, PretrainedWeights: {number}?)
+-- New(): Creates a new neural network.
+-- @param InputNodes number Number of input nodes
+-- @param HiddenNodes number Number of hidden nodes
+-- @param OutputNodes number Number of output nodes
+-- @param Seed? number Optional random seed
+-- @param PretrainedWeights? table Optional pre-trained weights
+-- @return LuaNetwork
+function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: number, Seed: number?, PretrainedWeights: {number}?)
 	if InputNodes <= 0 or HiddenNodes <= 0 or OutputNodes <= 0 then
 		error("InputNodes, HiddenNodes, and OutputNodes must be positive")
 	end
@@ -116,16 +140,16 @@ function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: nu
 		inputNodes = InputNodes,
 		hiddenNodes = HiddenNodes,
 		outputNodes = OutputNodes,
-		weightsIH = {}, -- // Input neurons to hidden neurons weights
-		weightsHO = {}, -- // Hidden neurons to output neurons weights
-		biasH = {}, -- // Biases for the Hidden Neurons
-		biasO = {} -- // Biases for the Output Neurons
+		weightsIH = {}, -- // Input -> Hidden weights
+		weightsHO = {}, -- // Hidden -> Output weights
+		biasH = {}, -- // Hidden biases
+		biasO = {} -- // Output biases
 	}, LuaNetwork)
 
-	if PretrainedWeights then -- // Using Python
+	if PretrainedWeights then -- From Python
 		self:LoadWeights(PretrainedWeights)
 	else
-		for i = 1, InputNodes do -- // Init Weights and Biases for all tables (-1, 1), (Weights are initialized by Uniform Xavier)
+		for i = 1, InputNodes do
 			self.weightsIH[i] = {}
 			for j = 1, HiddenNodes do
 				local scaleIH = math.sqrt(6 / (InputNodes + HiddenNodes))
@@ -150,33 +174,34 @@ function LuaNetwork.New(InputNodes: number, HiddenNodes: number, OutputNodes: nu
 	return self
 end
 
---[[
-	:Predict() Used to feed in data to the Neural Network for actual training
-	
-	- Data: A table of numbers for the neural network to learn from
-]]
+-- Predict(): Feeds input through the network and returns predictions.
+-- @param Data: Input values
+-- @return outputs: Predicted outputs
 function LuaNetwork:Predict(Data: {number}): {number}
 	if #Data ~= self.inputNodes then
 		error(string.format("Predict: Data length is %d, expected %d input nodes", #Data, self.inputNodes))
 	end
+	
 	local _, outputs = self:ForwardPropagation(Data)
+	
 	return outputs
 end
 
---[[
-	:Train() Used to train the data using Forward and Backpropagation. (Changes Weights and Biases, don't use if you already have pre determined weights)
-	
-	- Data: A table of numbers for the neural network to learn from
-	- Target: A table that has the desired values you want the Neural Network to learn
-	- LearningRate: How quickly the Neural Network adjusts it's parameters to learn
-]]
+-- Train(): Runs forward + backward propagation to train the network.
+-- @param Data: Input values
+-- @param Target: Expected values
+-- @param LearningRate: Learning rate (clamped [0.0001, 1])
+-- @return cost: The cost value
+-- @return outputs: Predicted outputs
 function LuaNetwork:Train(Data: {number}, Target: {number}, LearningRate: number): (number, {number})
 	if #Data ~= self.inputNodes then
 		error(string.format("Train: Data length is %d, expected %d input nodes", #Data, self.inputNodes))
 	end
+	
 	if #Target ~= self.outputNodes then
 		error(string.format("Train: Target length is %d, expected %d output nodes", #Target, self.outputNodes))
 	end
+	
 	if LearningRate < 0.0001 or LearningRate > 1 then
 		warn(string.format("LearningRate %.4f is outside recommended range [0.0001, 1], clamping", LearningRate))
 		LearningRate = math.clamp(LearningRate, 0.0001, 1)
@@ -184,7 +209,9 @@ function LuaNetwork:Train(Data: {number}, Target: {number}, LearningRate: number
 
 	local hiddenOutputs, outputs = self:ForwardPropagation(Data)
 	local cost = CostCalculator(outputs, Target)
+	
 	self:BackPropagation(Data, Target, hiddenOutputs, outputs, LearningRate)
+	
 	return cost, outputs
 end
 

@@ -1,31 +1,25 @@
+import os
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 import numpy as np
-import time
-import os
-from pathlib import Path
 
 class MNISTNet(nn.Module):
-    def __init__(self, num_hidden=256):
-        super(MNISTNet, self).__init__()
+    def __init__(self, num_hidden=256, dropout=0.2):
+        super().__init__()
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(784, num_hidden)
         self.bn1 = nn.BatchNorm1d(num_hidden)
-
-        self.activation = nn.ReLU() 
-        self.dropout = nn.Dropout(0.2)
         self.fc2 = nn.Linear(num_hidden, 10)
 
+        self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
         self._init_weights()
 
     def _init_weights(self):
-        if isinstance(self.activation, nn.ReLU):
-            nn.init.kaiming_normal_(self.fc1.weight, mode='fan_in', nonlinearity='relu')
-        else:
-            nn.init.xavier_normal_(self.fc1.weight)
-
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='relu')
         nn.init.zeros_(self.fc1.bias)
 
         nn.init.xavier_normal_(self.fc2.weight)
@@ -33,205 +27,141 @@ class MNISTNet(nn.Module):
 
     def forward(self, x):
         x = self.flatten(x)
-        x = self.fc1(x)
-
-        x = self.bn1(x)
-        x = self.activation(x)
+        x = self.activation(self.bn1(self.fc1(x)))
         x = self.dropout(x)
-        x = self.fc2(x)
-        return x
+        return self.fc2(x)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-if device.type == 'cuda':
-    try:
-        torch.cuda.memory_allocated()
-        print(f"Using device: {device} (GPU memory available)")
-    except RuntimeError as e:
-        print(f"CUDA error: {e}. Falling back to CPU.")
-        device = torch.device('cpu')
-else:
-    print(f"Using device: {device}")
+def get_device():
+    if torch.cuda.is_available():
+        try:
+            _ = torch.cuda.memory_allocated()
+            print("Using CUDA")
+            return torch.device("cuda")
+        except RuntimeError:
+            print("CUDA error — fallback to CPU")
+    return torch.device("cpu")
 
-train_transform = transforms.Compose([
-    transforms.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.95, 1.05)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,))
-])
+device = get_device()
 
-test_transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,))
-])
+def get_data_loaders(batch_size=128):
+    train_transform = transforms.Compose([
+        transforms.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
 
+    train_dataset = datasets.MNIST("./data", train=True, download=True, transform=train_transform)
+    test_dataset = datasets.MNIST("./data", train=False, download=True, transform=test_transform)
 
-try:
-    train_dataset = datasets.MNIST('./data', train=True, download=True, transform=train_transform)
-    test_dataset = datasets.MNIST('./data', train=False, download=True, transform=test_transform)
-except Exception as e:
-     print(f"Error downloading/loading MNIST dataset: {e}")
-     print("Please check your internet connection or disk space.")
-     exit()
+    pin_memory = device.type == "cuda"
+    num_workers = os.cpu_count() // 2 if pin_memory else 0
 
-pin_memory = device.type == 'cuda'
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size,
+                                               shuffle=True, pin_memory=pin_memory, num_workers=num_workers)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1000,
+                                              pin_memory=pin_memory, num_workers=num_workers)
+    return train_loader, test_loader
 
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True, pin_memory=pin_memory, num_workers=os.cpu_count()//2 if pin_memory else 0)
-test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1000, pin_memory=pin_memory, num_workers=os.cpu_count()//2 if pin_memory else 0)
+train_loader, test_loader = get_data_loaders()
 
-model = MNISTNet(num_hidden=256).to(device) 
-criterion = nn.CrossEntropyLoss()
-
-optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
-
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=3)
-
-def train(model, train_loader, criterion, optimizer, epoch, device):
+def train_epoch(model, loader, criterion, optimizer):
     model.train()
-    start_time = time.time()
-    running_loss = 0.0
-
-    for batch_idx, (images, labels) in enumerate(train_loader):
+    total_loss = 0
+    for images, labels in loader:
         images, labels = images.to(device), labels.to(device)
 
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-
         optimizer.zero_grad()
+        loss = criterion(model(images), labels)
         loss.backward()
         optimizer.step()
+        total_loss += loss.item()
+    return total_loss / len(loader)
 
-        running_loss += loss.item()
-
-        if (batch_idx + 1) % 100 == 0:
-            print(f'Epoch [{epoch+1}], Batch [{batch_idx+1}/{len(train_loader)}], Loss: {loss.item():.4f}')
-
-    epoch_loss = running_loss / len(train_loader)
-    epoch_time = time.time() - start_time
-    print(f'Epoch {epoch+1} completed in {epoch_time:.2f} seconds. Training Loss: {epoch_loss:.4f}')
-
-    return epoch_loss
-
-def evaluate(model, test_loader, device):
+def evaluate(model, loader, criterion):
     model.eval()
-    correct = 0
-    total = 0
-    start_time = time.time()
-    test_loss = 0.0
-    criterion_eval = nn.CrossEntropyLoss()
-
+    correct, total, total_loss = 0, 0, 0
     with torch.no_grad():
-        for images, labels in test_loader:
+        for images, labels in loader:
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
-            loss = criterion_eval(outputs, labels)
-            test_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
+            total_loss += criterion(outputs, labels).item()
+            preds = outputs.argmax(dim=1)
+            correct += (preds == labels).sum().item()
             total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+    return total_loss / len(loader), 100.0 * correct / total
 
-    avg_test_loss = test_loss / len(test_loader)
-    accuracy = 100 * correct / total
-    eval_time = time.time() - start_time
-    print(f'Test Accuracy: {accuracy:.2f}%, Average Test Loss: {avg_test_loss:.4f} (evaluated in {eval_time:.2f} seconds)')
+def train_model(epochs=10, patience=7, save_path="best_mnist_model.pth"):
+    model = MNISTNet().to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", factor=0.5, patience=3)
 
-    return avg_test_loss, accuracy
+    best_acc, patience_count = 0.0, 0
+    history = {"train_loss": [], "test_loss": [], "test_accuracy": []}
 
-best_accuracy = 0
-best_loss = float('inf')
-patience_counter = 0
-early_stopping_patience = 7 
-epochs = 1 
-history = {'train_loss': [], 'test_loss': [], 'test_accuracy': []}
-model_path = 'best_mnist_model.pth'
+    for epoch in range(epochs):
+        t0 = time.time()
+        train_loss = train_epoch(model, train_loader, criterion, optimizer)
+        test_loss, acc = evaluate(model, test_loader, criterion)
+        scheduler.step(test_loss)
 
-print("Starting Training...")
-for epoch in range(epochs):
-    train_loss = train(model, train_loader, criterion, optimizer, epoch, device)
-    test_loss, accuracy = evaluate(model, test_loader, device)
+        history["train_loss"].append(train_loss)
+        history["test_loss"].append(test_loss)
+        history["test_accuracy"].append(acc)
 
-    scheduler.step(test_loss)
+        print(f"Epoch {epoch+1}: Train {train_loss:.4f}, Test {test_loss:.4f}, Acc {acc:.2f}% "
+              f"({time.time()-t0:.2f}s)")
 
-    history['train_loss'].append(train_loss)
-    history['test_loss'].append(test_loss)
-    history['test_accuracy'].append(accuracy)
+        if acc > best_acc:
+            best_acc = acc
+            torch.save(model.state_dict(), save_path)
+            patience_count = 0
+            print(f"  Improved to {acc:.2f}%, model saved.")
+        else:
+            patience_count += 1
+            if patience_count >= patience:
+                print("Early stopping.")
+                break
 
-    if accuracy > best_accuracy:
-        print(f"Accuracy improved ({best_accuracy:.2f}% -> {accuracy:.2f}%). Saving model...")
-        best_accuracy = accuracy
-        torch.save(model.state_dict(), model_path)
-        patience_counter = 0
+    model.load_state_dict(torch.load(save_path, map_location=device))
+    print(f"Training complete. Best accuracy: {best_acc:.2f}%")
+    return model, history, best_acc
 
-    else:
-        patience_counter += 1
-        print(f"No improvement in accuracy for {patience_counter} epoch(s).")
-
-    if patience_counter >= early_stopping_patience:
-        print(f"Early stopping triggered after {epoch+1} epochs due to lack of accuracy improvement.")
-        break
-
-print(f"Training finished. Best test accuracy: {best_accuracy:.2f}%")
-
-print(f"Loading best weights from {model_path}")
-try:
-    map_location = torch.device('cpu') if not torch.cuda.is_available() else None
-    model.load_state_dict(torch.load(model_path, map_location=map_location))
-    print("Successfully loaded best model weights.")
-    evaluate(model, test_loader, device)
-except FileNotFoundError:
-    print(f"Error: '{model_path}' not found. Using final model weights.")
-except Exception as e:
-    print(f"Error loading model weights: {e}. Using final model weights.")
-
-
-def save_weights_to_lua(model, filename="Weights.lua"):
+def save_weights_to_lua(model, filename="Weights.lua", accuracy=0):
     model.eval()
+    w1, b1 = model.fc1.weight.data.cpu().numpy(), model.fc1.bias.data.cpu().numpy()
+    w2, b2 = model.fc2.weight.data.cpu().numpy(), model.fc2.bias.data.cpu().numpy()
+    bn = model.bn1
 
-    weights_ih = model.fc1.weight.data.cpu().numpy()  # [256, 784]
-    bias_h = model.fc1.bias.data.cpu().numpy()
-    bn_running_mean = model.bn1.running_mean.data.cpu().numpy()
-    bn_running_var = model.bn1.running_var.data.cpu().numpy()
-    bn_weight = model.bn1.weight.data.cpu().numpy()
-    bn_bias = model.bn1.bias.data.cpu().numpy()
-    bn_eps = model.bn1.eps
-    weights_ho = model.fc2.weight.data.cpu().numpy()  # [10, 256]
-    bias_o = model.fc2.bias.data.cpu().numpy()
+    mean, var = bn.running_mean.cpu().numpy(), bn.running_var.cpu().numpy()
+    gamma, beta, eps = bn.weight.detach().cpu().numpy(), bn.bias.detach().cpu().numpy(), bn.eps
+    scale = gamma / np.sqrt(var + eps)
 
-    bn_scale = bn_weight / np.sqrt(bn_running_var + bn_eps)
-    weights_ih_folded = weights_ih * bn_scale[:, np.newaxis]
-    bias_h_folded = (bias_h - bn_running_mean) * bn_scale + bn_bias
+    w1_folded = (w1 * scale[:, None]).T
+    b1_folded = (b1 - mean) * scale + beta
+    w2, b2 = w2.T, b2
 
-    weights_ih_folded = weights_ih_folded.T 
-    weights_ho = weights_ho.T
+    with open(filename, "w") as f:
+        f.write(f"-- Weights Export (Acc: {accuracy:.2f}%)\nlocal Weights = {{}}\n\n")
 
-    with open(filename, 'w') as f:
-        f.write(f"-- // Format: [Input][Hidden] for weightsIH, [Hidden][Output] for weightsHO. Accuracy: {best_accuracy:.2f}%\n")
-        f.write("local Weights = {}\n\n")
-
-        # Linear Layer 1 (folded) - [Input][Hidden]
-        f.write("Weights.weightsIH = { -- // [Input][Hidden]\n")
-        for i in range(weights_ih_folded.shape[0]): # 784 inputs
-            f.write("  {")
-            f.write(",".join(f"{w:.8f}" for w in weights_ih_folded[i, :]))
-            f.write("},\n")
+        f.write("Weights.weightsIH = {\n")
+        for row in w1_folded: f.write("  {" + ",".join(f"{v:.8f}" for v in row) + "},\n")
         f.write("}\n\n")
 
-        # Linear Layer 2 - [Hidden][Output]
-        f.write("Weights.weightsHO = { -- // [Hidden][Output]\n")
-        for j in range(weights_ho.shape[0]): # 256 hidden
-            f.write("  {")
-            f.write(",".join(f"{w:.8f}" for w in weights_ho[j, :]))
-            f.write("},\n")
+        f.write("Weights.weightsHO = {\n")
+        for row in w2: f.write("  {" + ",".join(f"{v:.8f}" for v in row) + "},\n")
         f.write("}\n\n")
 
-        f.write("Weights.biasH = { -- // [Hidden]\n  ")
-        f.write(", ".join(f"{b:.8f}" for b in bias_h_folded))
-        f.write("\n}\n\n")
-
-        f.write("Weights.biasO = { -- // [Output]\n  ")
-        f.write(", ".join(f"{b:.8f}" for b in bias_o))
-        f.write("\n}\n\n")
-
+        f.write("Weights.biasH = {" + ", ".join(f"{v:.8f}" for v in b1_folded) + "}\n\n")
+        f.write("Weights.biasO = {" + ", ".join(f"{v:.8f}" for v in b2) + "}\n\n")
         f.write("return Weights")
-    print(f"Finished saving weights to {filename}")
 
+    print(f"Saved weights to {filename}")
 
-save_weights_to_lua(model)
+if __name__ == "__main__":
+    model, history, best_acc = train_model(epochs=1)
+    save_weights_to_lua(model, accuracy=best_acc)
